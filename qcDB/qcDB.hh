@@ -150,7 +150,7 @@ public:
             object* currentObject = reinterpret_cast<object*>(m_DBAddress + sizeof(DBHeader) + record * sizeof(object));
             for (; record < NumberOfRecords(); record++)
             {
-                if (std::memcmp(currentObject, &emptyObject, sizeof(object)) == 0)
+                if (memcmp(currentObject, &emptyObject, sizeof(object)) == 0)
                 {
                     header->m_LastWritten = record;
                     memcpy(currentObject, &objectWrite, sizeof(object));
@@ -248,7 +248,7 @@ public:
             object* currentObject = reinterpret_cast<object*>(m_DBAddress + sizeof(DBHeader) + record * sizeof(object));
             for (; record < NumberOfRecords(); record++)
             {
-                if (0 == std::memcmp(currentObject, &emptyObject, sizeof(object)))
+                if (0 == memcmp(currentObject, &emptyObject, sizeof(object)))
                 {
                     if (objectsIterator == objects.end())
                     {
@@ -312,7 +312,7 @@ public:
                 for (; p_object != m_DBAddress; p_object -= sizeof(object))
                 {
                     --record;
-                    if (std::memcmp(p_object, &deletedObject, sizeof(object)) != 0)
+                    if (memcmp(p_object, &deletedObject, sizeof(object)) != 0)
                     {
                         break;
                     }
@@ -665,7 +665,7 @@ protected:
             return RTN_LOCK_ERROR;
         }
 #else
-        lockError = pthread_rwlock_unlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
+        int lockError = pthread_rwlock_unlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
         if (0 != lockError)
         {
             return RTN_LOCK_ERROR;

@@ -240,7 +240,7 @@ int main(int argc, char* argv[])
 
     shmctl(shm_id, IPC_RMID, 0);
 #endif
-    std::vector<size_t> foundRecords;
+    std::vector<CHARACTER> foundRecords;
     retcode = database.FindObjects(
         [](const CHARACTER* character) -> bool
         {

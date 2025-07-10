@@ -13,5 +13,5 @@ set(COMPONENT_DB_TEST testDB)
 set(COMPONENT_WINDOWS_DB_TEST windowsTestDB)
 
 add_subdirectory(${COMPONENT_DB_GENERATOR})
-#add_subdirectory(${COMPONENT_DB_TEST})
-add_subdirectory(${COMPONENT_WINDOWS_DB_TEST})
+add_subdirectory(${COMPONENT_DB_TEST})
+#add_subdirectory(${COMPONENT_WINDOWS_DB_TEST})
