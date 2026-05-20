@@ -14,8 +14,10 @@
 #endif
 #include <iostream>
 #include <algorithm>
+#include <cstring>
 #include <functional>
 #include <thread>
+#include <vector>
 
 #include <common/Retcode.hh>
 #include <common/DBHeader.hh>
@@ -77,11 +79,13 @@ public:
                 return retcode;
             }
 
-            for(std::tuple<size_t, object> readObject : objects)
+
+            for(std::tuple<size_t, object>& readObject : objects)
             {
                 char* p_object = Get(std::get<0>(readObject));
                 if(nullptr == p_object)
                 {
+                    UnlockDB();
                     return RTN_NULL_OBJ;
                 }
                 memcpy(&std::get<1>(readObject), p_object, sizeof(object));
@@ -108,7 +112,7 @@ public:
                 return RTN_NULL_OBJ;
             }
 
-            retcode = LockDB();
+            retcode = WriteLockDB();
             if (RTN_OK != retcode)
             {
                 return retcode;
@@ -139,7 +143,7 @@ public:
         {
             RETCODE retcode = RTN_OK;
             object emptyObject = { 0 };
-            retcode = LockDB();
+            retcode = WriteLockDB();
             if (RTN_OK != retcode)
             {
                 return retcode;
@@ -195,17 +199,18 @@ public:
                 }
             );
 
-            retcode = LockDB();
+            retcode = WriteLockDB();
             if (RTN_OK != retcode)
             {
                 return retcode;
             }
 
-            for(std::tuple<size_t, object> writeObject : objects)
+            for(std::tuple<size_t, object>& writeObject : objects)
             {
                 char* p_object = Get(std::get<0>(writeObject));
                 if(nullptr == p_object)
                 {
+                    UnlockDB();
                     return RTN_NULL_OBJ;
                 }
                 memcpy(p_object, &std::get<1>(writeObject), sizeof(object));
@@ -237,7 +242,7 @@ public:
             const object emptyObject = { 0 };
             auto objectsIterator = objects.begin();
 
-            retcode = LockDB();
+            retcode = WriteLockDB();
             if (RTN_OK != retcode)
             {
                 return retcode;
@@ -296,7 +301,7 @@ public:
                 return RTN_NULL_OBJ;
             }
 
-            retcode = LockDB();
+            retcode = WriteLockDB();
             if (RTN_OK != retcode)
             {
                 return retcode;
@@ -309,13 +314,20 @@ public:
             // If the deleted record was the last one, find the next last record
             if (size == record)
             {
-                for (; p_object != m_DBAddress; p_object -= sizeof(object))
+                for (p_object -= sizeof(object);
+                     p_object >= m_DBAddress + sizeof(DBHeader);
+                     p_object -= sizeof(object))
                 {
                     --record;
                     if (memcmp(p_object, &deletedObject, sizeof(object)) != 0)
                     {
                         break;
                     }
+                }
+
+                if (p_object < m_DBAddress + sizeof(DBHeader))
+                {
+                    record = 0;
                 }
 
                 header->m_Size = record;
@@ -338,7 +350,7 @@ public:
             RETCODE retcode = RTN_OK;
             if (m_IsOpen)
             {
-                retcode = LockDB();
+                retcode = WriteLockDB();
                 if (RTN_OK != retcode)
                 {
                     return retcode;
@@ -392,7 +404,7 @@ public:
             const object* currentObject = reinterpret_cast<const object*>(m_DBAddress + sizeof(DBHeader));
             size_t size = reinterpret_cast<DBHeader*>(m_DBAddress)->m_Size;
             size_t record = 0;
-            for (record = 0; record < size; record++)
+            for (record = 0; record <= size; record++)
             {
                 if (predicate(currentObject))
                 {
@@ -431,6 +443,10 @@ public:
 #else
             size_t numThreads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
 #endif
+            if (0 == numThreads)
+            {
+                numThreads = 1;
+            }
             std::vector<std::thread> threads;
             std::vector<std::vector<object>> results(numThreads);
 
@@ -450,7 +466,7 @@ public:
                 currentObject += segmentSize;
             }
 
-            threads.emplace_back(FinderThread, predicate, currentObject, size - ((numThreads - 1) * segmentSize), std::ref(results[numThreads - 1]));
+            threads.emplace_back(FinderThread, predicate, currentObject, size + 1 - ((numThreads - 1) * segmentSize), std::ref(results[numThreads - 1]));
 
             for (std::thread& thread : threads)
             {
@@ -500,7 +516,7 @@ public:
                 retcode = LockDB();
                 if (RTN_OK != retcode)
                 {
-                    return retcode;
+                    return static_cast<size_t>(-1);
                 }
 
                 record = reinterpret_cast<DBHeader*>(m_DBAddress)->m_LastWritten;
@@ -508,7 +524,7 @@ public:
                 retcode = UnlockDB();
                 if (RTN_OK != retcode)
                 {
-                    return retcode;
+                    return static_cast<size_t>(-1);
                 }
 
             }
@@ -586,7 +602,7 @@ public:
             }
 #else
             int fd = open(dbPath.c_str(), O_RDWR);
-            if(INVALID_FD > fd)
+            if(fd < 0)
             {
                 return;
             }
@@ -595,6 +611,7 @@ public:
             int error = fstat(fd, &statbuf);
             if(0 > error)
             {
+                close(fd);
                 return;
             }
 
@@ -602,6 +619,7 @@ public:
             m_DBAddress = static_cast<char*>(mmap(nullptr, m_Size,
                     PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
                     fd, 0));
+            close(fd);
             if(MAP_FAILED == m_DBAddress)
             {
                 return;
@@ -623,7 +641,6 @@ public:
             int error = munmap(m_DBAddress, m_Size);
             if(0 == error)
             {
-                // Nothing much you can do in this case..
                 m_IsOpen = false;
             }
 #endif
@@ -639,6 +656,10 @@ protected:
 #ifdef WINDOWS_PLATFORM
         m_Mutex = CreateMutexA(NULL, FALSE, "MutexForFileLock");
         if (nullptr == m_Mutex)
+        {
+            return RTN_LOCK_ERROR;
+        }
+        if (WAIT_FAILED == WaitForSingleObject(m_Mutex, INFINITE))
         {
             return RTN_LOCK_ERROR;
         }
@@ -660,7 +681,7 @@ protected:
     RETCODE UnlockDB(void)
     {
 #ifdef WINDOWS_PLATFORM
-        if (ReleaseMutex(m_Mutex))
+        if (!ReleaseMutex(m_Mutex))
         {
             return RTN_LOCK_ERROR;
         }
@@ -673,6 +694,29 @@ protected:
 #endif
 
     return RTN_OK;
+    }
+
+    RETCODE WriteLockDB(void)
+    {
+#ifdef WINDOWS_PLATFORM
+        m_Mutex = CreateMutexA(NULL, FALSE, "MutexForFileLock");
+        if (nullptr == m_Mutex)
+        {
+            return RTN_LOCK_ERROR;
+        }
+        if (WAIT_FAILED == WaitForSingleObject(m_Mutex, INFINITE))
+        {
+            return RTN_LOCK_ERROR;
+        }
+#else
+        int lockError = pthread_rwlock_wrlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
+        if (0 != lockError)
+        {
+            return RTN_LOCK_ERROR;
+        }
+#endif
+
+        return RTN_OK;
     }
 
     /*
@@ -709,10 +753,11 @@ protected:
     {
         for (size_t record = 0; record < numRecords; record++)
         {
-            if (predicate(++currentObject))
+            if (predicate(currentObject))
             {
                 results.push_back(*currentObject);
             }
+            currentObject++;
         }
     }
 
@@ -726,7 +771,7 @@ protected:
 #else
 #endif
 
-    static constexpr int INVALID_FD = 0;
+    static constexpr int INVALID_FD = -1;
 
     };
 }
