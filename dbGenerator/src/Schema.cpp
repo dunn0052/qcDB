@@ -244,7 +244,7 @@ static RETCODE GenerateFieldHeader(const FIELD_SCHEMA& field, std::ofstream& hea
     return RTN_OK;
 }
 
-static RETCODE GenerateObectFooter(const OBJECT_SCHEMA& object, std::ofstream& headerFile)
+static RETCODE GenerateObjectFooter(const OBJECT_SCHEMA& object, std::ofstream& headerFile)
 {
     headerFile << "\n};\n\n";
 
@@ -293,7 +293,7 @@ static RETCODE GenerateHeader(const OBJECT_SCHEMA& object, const std::string& he
         }
     }
 
-    retcode = GenerateObectFooter(object, headerFileStream);
+    retcode = GenerateObjectFooter(object, headerFileStream);
     if(RTN_OK != retcode)
     {
         return retcode;
@@ -333,7 +333,7 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
         LOG_FATAL("Could not set file pointer for file: ",
             databaseFile,
             " due to error: ",
-            ErrorString(errno));
+            ErrorString(GetLastError()));
         CloseHandle(hFile);
         return RTN_MALLOC_FAIL;
     }
@@ -344,7 +344,7 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
         LOG_FATAL("Failed to truncate file: ",
             databaseFile,
             " due to error: ",
-            ErrorString(errno));
+            ErrorString(GetLastError()));
         CloseHandle(hFile);
         return RTN_EOF;
     }
@@ -355,7 +355,7 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
         LOG_FATAL("Could not reset pointer for file: ",
             databaseFile,
             " due to error: ",
-            ErrorString(errno));
+            ErrorString(GetLastError()));
         CloseHandle(hFile);
         return RTN_MALLOC_FAIL;
     }
@@ -415,6 +415,7 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
     pthread_rwlockattr_init(&dbLockAttributest);
     pthread_rwlockattr_setpshared(&dbLockAttributest, PTHREAD_PROCESS_SHARED);
     pthread_rwlock_init(&dbHeader.m_DBLock, &dbLockAttributest);
+    pthread_rwlockattr_destroy(&dbLockAttributest);
     size_t numbytes = write(fd, static_cast<void*>(&dbHeader), sizeof(DBHeader));
 
     if(sizeof(DBHeader) != numbytes)
@@ -472,15 +473,15 @@ RETCODE GenerateDatabase(const std::string& schemaPath, const std::string& heade
     while(std::getline(schema, line))
     {
         currentLineNumber++;
-        firstNonEmptyChar = line.find_first_not_of(' ');
-        firstChar = line.at(firstNonEmptyChar);
+        firstNonEmptyChar = line.find_first_not_of(" \t");
 
-        if(CONSTANTS::SCHEMA_COMMENT == firstChar)
+        if(std::string::npos == firstNonEmptyChar)
         {
             continue;
         }
 
-        if(std::string::npos == firstNonEmptyChar)
+        firstChar = line[firstNonEmptyChar];
+        if(CONSTANTS::SCHEMA_COMMENT == firstChar)
         {
             continue;
         }
@@ -503,7 +504,7 @@ RETCODE GenerateDatabase(const std::string& schemaPath, const std::string& heade
                 {
                     LOG_FATAL("Padding of: ",
                         padding,
-                        " bytes dected for field: ",
+                        " bytes detected for field: ",
                         field.fieldName,
                         " on line: ",
                         currentLineNumber);

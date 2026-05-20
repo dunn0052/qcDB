@@ -29,10 +29,16 @@ int main(int argc, char* argv[])
 
     std::string schemaPath = schemaArg.GetValue();
 
+    auto ensureTrailingSlash = [](std::string path) -> std::string {
+        if(!path.empty() && path.back() != '/' && path.back() != '\\')
+            path += '/';
+        return path;
+    };
+
     std::string headerOutputPath;
     if(headerPathArg.IsInUse())
     {
-        headerOutputPath = headerPathArg.GetValue();
+        headerOutputPath = ensureTrailingSlash(headerPathArg.GetValue());
     }
     else
     {
@@ -42,7 +48,7 @@ int main(int argc, char* argv[])
     std::string databaseOutputPath;
     if(databasePathArg.IsInUse())
     {
-        databaseOutputPath = databasePathArg.GetValue();
+        databaseOutputPath = ensureTrailingSlash(databasePathArg.GetValue());
     }
     else
     {
