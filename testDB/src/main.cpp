@@ -148,9 +148,9 @@ int main(int argc, char* argv[])
     {
         g_NAME = nameArg.GetValue();
     }
-#if 0
+
     /// Set up shared memory key on a file
-    key_t key = ftok("/home/osboxes/.bashrc", 1);
+    key_t key = ftok("/home/kdunn/.bashrc", 1);
     if(-1 == key)
     {
         LOG_FATAL("Could not get shared memory key due to error: ", ErrorString(errno));
@@ -239,7 +239,7 @@ int main(int argc, char* argv[])
     LOG_INFO("Total reads + writes: ", totalReads + totalWrites, " in: ", g_TIME, " second(s)");
 
     shmctl(shm_id, IPC_RMID, 0);
-#endif
+
     std::vector<CHARACTER> foundRecords;
     retcode = database.FindObjects(
         [](const CHARACTER* character) -> bool
