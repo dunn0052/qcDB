@@ -22,6 +22,10 @@
 #include <thread>
 #include <vector>
 
+#ifndef WINDOWS_PLATFORM
+#include <time.h>
+#endif
+
 #include <common/Retcode.hh>
 #include <common/DBHeader.hh>
 
@@ -132,6 +136,8 @@ public:
             }
 
             memcpy(p_object, &objectWrite, sizeof(object));
+            *reinterpret_cast<unsigned long*>(p_object)                         = static_cast<unsigned long>(record);
+            *reinterpret_cast<unsigned long*>(p_object + sizeof(unsigned long))  = MetadataTimestamp();
             return UnlockDB();
         }
 
@@ -164,6 +170,8 @@ public:
                 {
                     header->m_LastWritten = record;
                     memcpy(p, &objectWrite, sizeof(object));
+                    *reinterpret_cast<unsigned long*>(p)                        = static_cast<unsigned long>(record);
+                    *reinterpret_cast<unsigned long*>(p + sizeof(unsigned long)) = MetadataTimestamp();
                     if (header->m_Size < record)
                     {
                         header->m_Size = record;
@@ -212,6 +220,8 @@ public:
                     return RTN_NULL_OBJ;
                 }
                 memcpy(p_object, &std::get<1>(writeObject), sizeof(object));
+                *reinterpret_cast<unsigned long*>(p_object)                         = static_cast<unsigned long>(std::get<0>(writeObject));
+                *reinterpret_cast<unsigned long*>(p_object + sizeof(unsigned long))  = MetadataTimestamp();
             }
 
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
@@ -265,6 +275,8 @@ public:
                         break;
                     }
                     memcpy(p, &(*objectsIterator), sizeof(object));
+                    *reinterpret_cast<unsigned long*>(p)                        = static_cast<unsigned long>(record);
+                    *reinterpret_cast<unsigned long*>(p + sizeof(unsigned long)) = MetadataTimestamp();
                     ++objectsIterator;
                 }
             }
@@ -937,6 +949,23 @@ protected:
             pthread_rwlock_unlock(dbLock);
             record = chunk_end;
         }
+#endif
+    }
+
+    static unsigned long MetadataTimestamp()
+    {
+#ifdef WINDOWS_PLATFORM
+        FILETIME ft;
+        GetSystemTimeAsFileTime(&ft);
+        ULARGE_INTEGER uli;
+        uli.LowPart  = ft.dwLowDateTime;
+        uli.HighPart = ft.dwHighDateTime;
+        return static_cast<unsigned long>(uli.QuadPart * 100ULL);
+#else
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        return static_cast<unsigned long>(ts.tv_sec) * 1000000000UL
+             + static_cast<unsigned long>(ts.tv_nsec);
 #endif
     }
 
