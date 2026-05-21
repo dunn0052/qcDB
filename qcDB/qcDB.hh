@@ -521,7 +521,7 @@ public:
 
                 threads.emplace_back(FinderThread, predicate, m_fd, dbLock,
                     startRecord, endRecord, m_ChunkRecords,
-                    m_PageSize, m_Size, std::ref(results[threadIndex]));
+                    m_PageSize, m_Size, m_SchemaOffset, std::ref(results[threadIndex]));
             }
 
             for (std::thread& thread : threads)
@@ -920,11 +920,12 @@ protected:
                              size_t chunkRecords,
                              size_t pageSize,
                              size_t fileSize,
+                             size_t schemaOffset,
                              std::vector<object>& results)
     {
 #ifdef WINDOWS_PLATFORM
         (void)fd; (void)dbLock; (void)startRecord; (void)endRecord;
-        (void)chunkRecords; (void)pageSize; (void)fileSize;
+        (void)chunkRecords; (void)pageSize; (void)fileSize; (void)schemaOffset;
         return;
 #else
         size_t consecutive_skips = 0;
@@ -952,7 +953,7 @@ protected:
                 consecutive_skips = 0;
             }
 
-            size_t file_offset = sizeof(DBHeader) + chunk_start * sizeof(object);
+            size_t file_offset = sizeof(DBHeader) + schemaOffset + chunk_start * sizeof(object);
             size_t aligned_off = (file_offset / pageSize) * pageSize;
             size_t extra       = file_offset - aligned_off;
             size_t data_bytes  = chunkRecords * sizeof(object);
