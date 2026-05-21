@@ -351,7 +351,7 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
         return RTN_MALLOC_FAIL;
     }
 #else
-    int fd = open(databaseFile.c_str(), O_RDWR | O_CREAT, CONSTANTS::RW);
+    int fd = open(databaseFile.c_str(), O_RDWR | O_CREAT | O_TRUNC, CONSTANTS::RW);
     if (0 > fd)
     {
         LOG_WARN("Failed to open or create ", databaseFile);
