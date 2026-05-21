@@ -8,6 +8,7 @@
 
 #include <fcntl.h>
 #include <fstream>
+#include <climits>
 
 static RETCODE ParseField(std::istringstream& lineStream, FIELD_SCHEMA& out_field)
 {
@@ -600,6 +601,16 @@ RETCODE GenerateDatabase(const std::string& schemaPath, const std::string& heade
         if(field.fieldName.length() > 31)
         {
             LOG_FATAL("Field name '", field.fieldName, "' exceeds 31 characters");
+            return RTN_BAD_ARG;
+        }
+    }
+
+    for(const FIELD_SCHEMA& field : object.fields)
+    {
+        if(field.fieldOffset > UINT16_MAX)
+        {
+            LOG_FATAL("Field '", field.fieldName, "' offset ", field.fieldOffset,
+                      " exceeds uint16_t maximum — record struct too large");
             return RTN_BAD_ARG;
         }
     }
