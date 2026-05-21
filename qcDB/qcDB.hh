@@ -541,95 +541,105 @@ public:
 
         dbInterface(const std::string& dbPath) :
             m_IsOpen(false), m_Size(0),
-            m_DBAddress(nullptr), m_NumRecords(0)
+            m_DBAddress(nullptr), m_NumRecords(0),
+            m_fd(INVALID_FD), m_DataWindow(nullptr),
+            m_WindowChunkIndex(SIZE_MAX), m_WindowMappedBytes(0),
+            m_WindowExtra(0), m_ChunkRecords(1), m_PageSize(4096)
 #ifdef WINDOWS_PLATFORM
             , m_Mutex(INVALID_HANDLE_VALUE)
 #endif
         {
 #ifdef WINDOWS_PLATFORM
+            SYSTEM_INFO sysInfo;
+            GetSystemInfo(&sysInfo);
+            m_PageSize = static_cast<size_t>(sysInfo.dwAllocationGranularity);
+
             HANDLE hFile = CreateFileA(
-                static_cast<LPCSTR>(dbPath.c_str()), // File name
-                GENERIC_READ | GENERIC_WRITE,        // Access mode
-                FILE_SHARE_READ | FILE_SHARE_WRITE,  // Share mode
-                NULL,                                // Security attributes
-                OPEN_EXISTING,                         // How to create
-                FILE_ATTRIBUTE_NORMAL,               // File attributes
-                NULL                                 // Handle to template file
+                static_cast<LPCSTR>(dbPath.c_str()),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                NULL,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                NULL
             );
 
             if (hFile == INVALID_HANDLE_VALUE)
-            {
                 return;
-            }
 
-            // Get the file size
             m_Size = static_cast<size_t>(GetFileSize(hFile, NULL));
-            if (m_Size == INVALID_FILE_SIZE) {
+            if (m_Size == INVALID_FILE_SIZE)
+            {
                 CloseHandle(hFile);
                 return;
             }
 
-            HANDLE hMapFile = CreateFileMappingA(
-                hFile,                          // File handle
-                NULL,                           // Security attributes
-                PAGE_READWRITE,                 // Protection
-                0,                              // High-order 32 bits of file size
-                0,                              // Low-order 32 bits of file size
-                NULL                            // Name of file-mapping object
-            );
-
-            if (hMapFile == NULL) {
+            // Map header page permanently
+            size_t headerMapSize = m_PageSize;
+            HANDLE hMapFile = CreateFileMappingA(hFile, NULL, PAGE_READWRITE, 0,
+                static_cast<DWORD>(headerMapSize), NULL);
+            if (hMapFile == NULL)
+            {
                 CloseHandle(hFile);
                 return;
             }
 
-            // Close the file handle, as it's not needed anymore
+            m_DBAddress = static_cast<char*>(MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS,
+                0, 0, headerMapSize));
+            CloseHandle(hMapFile);
             CloseHandle(hFile);
 
-
-            // Map the file to memory
-            m_DBAddress = static_cast<char*>(MapViewOfFile(
-                hMapFile,                       // Handle to file mapping object
-                FILE_MAP_ALL_ACCESS,            // Access mode
-                0,                              // High-order 32 bits of file offset
-                0,                              // Low-order 32 bits of file offset
-                0                               // Number of bytes to map (0 for all)
-            ));
-
-            // Close the file mapping handle
-            CloseHandle(hMapFile);
-
             if (nullptr == m_DBAddress)
-            {
                 return;
-            }
+
 #else
-            int fd = open(dbPath.c_str(), O_RDWR);
-            if(fd < 0)
+            m_PageSize = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+
+            m_fd = open(dbPath.c_str(), O_RDWR);
+            if (m_fd < 0)
             {
+                m_fd = INVALID_FD;
                 return;
             }
 
             struct stat statbuf;
-            int error = fstat(fd, &statbuf);
-            if(0 > error)
+            if (0 > fstat(m_fd, &statbuf))
             {
-                close(fd);
+                close(m_fd);
+                m_fd = INVALID_FD;
                 return;
             }
 
-            m_Size = statbuf.st_size;
-            m_DBAddress = static_cast<char*>(mmap(nullptr, m_Size,
-                    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
-                    fd, 0));
-            close(fd);
-            if(MAP_FAILED == m_DBAddress)
+            m_Size = static_cast<size_t>(statbuf.st_size);
+
+            // Map header permanently — one page covers sizeof(DBHeader) (~104 bytes)
+            size_t headerMapSize = m_PageSize;
+            m_DBAddress = static_cast<char*>(mmap(nullptr, headerMapSize,
+                PROT_READ | PROT_WRITE, MAP_SHARED, m_fd, 0));
+            if (MAP_FAILED == m_DBAddress)
             {
+                m_DBAddress = nullptr;
+                close(m_fd);
+                m_fd = INVALID_FD;
                 return;
             }
-
 #endif
             m_NumRecords = reinterpret_cast<DBHeader*>(m_DBAddress)->m_NumRecords;
+            m_ChunkRecords = std::max(size_t(1), m_PageSize / sizeof(object));
+
+            // Map initial data window (chunk 0) if DB has records
+            if (m_NumRecords > 0 && !SlideWindow(0))
+            {
+#ifdef WINDOWS_PLATFORM
+                UnmapViewOfFile(m_DBAddress);
+#else
+                munmap(m_DBAddress, m_PageSize);
+                close(m_fd);
+                m_fd = INVALID_FD;
+#endif
+                m_DBAddress = nullptr;
+                return;
+            }
 
             m_IsOpen = true;
         }
