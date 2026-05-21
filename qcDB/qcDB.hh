@@ -39,11 +39,15 @@ public:
         RETCODE ReadObject(size_t record, object& out_object)
         {
             if (!m_IsOpen || record >= m_NumRecords)
+            {
                 return RTN_NULL_OBJ;
+            }
 
             RETCODE retcode = LockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             char* p_object = Get(record);
             if (nullptr == p_object)
@@ -103,11 +107,15 @@ public:
         RETCODE WriteObject(size_t record, object& objectWrite)
         {
             if (!m_IsOpen || record >= m_NumRecords)
+            {
                 return RTN_NULL_OBJ;
+            }
 
             RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             char* p_object = Get(record);
             if (nullptr == p_object)
@@ -119,7 +127,9 @@ public:
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
             header->m_LastWritten = record;
             if (header->m_Size < record)
+            {
                 header->m_Size = record;
+            }
 
             memcpy(p_object, &objectWrite, sizeof(object));
             return UnlockDB();
@@ -133,7 +143,9 @@ public:
             const object emptyObject = {};
             RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
             size_t record = header->m_LastWritten;
@@ -153,7 +165,9 @@ public:
                     header->m_LastWritten = record;
                     memcpy(p, &objectWrite, sizeof(object));
                     if (header->m_Size < record)
+                    {
                         header->m_Size = record;
+                    }
                     found = true;
                     break;
                 }
@@ -161,7 +175,9 @@ public:
 
             retcode = UnlockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             return found ? RTN_OK : RTN_NOT_FOUND;
         }
@@ -225,7 +241,9 @@ public:
 
             RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
             size_t record = header->m_LastWritten;
@@ -252,11 +270,15 @@ public:
             }
 
             if (header->m_Size < record)
+            {
                 header->m_Size = record;
+            }
 
             retcode = UnlockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             return (objectsIterator != objects.end()) ? RTN_EOF : RTN_OK;
         }
@@ -267,11 +289,15 @@ public:
         RETCODE DeleteObject(size_t record)
         {
             if (!m_IsOpen || record >= m_NumRecords)
+            {
                 return RTN_NULL_OBJ;
+            }
 
             RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             char* p_object = Get(record);
             if (nullptr == p_object)
@@ -292,7 +318,10 @@ public:
                 for (size_t i = record; i-- > 0;)
                 {
                     char* p = Get(i);
-                    if (nullptr == p) break;
+                    if (nullptr == p)
+                    {
+                        break;
+                    }
                     if (memcmp(p, &deletedObject, sizeof(object)) != 0)
                     {
                         newSize = i;
@@ -311,11 +340,15 @@ public:
         RETCODE Clear(void)
         {
             if (!m_IsOpen)
+            {
                 return RTN_MALLOC_FAIL;
+            }
 
             RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
+            {
                 return retcode;
+            }
 
             size_t total_chunks = (m_NumRecords + m_ChunkRecords - 1) / m_ChunkRecords;
             for (size_t chunk = 0; chunk < total_chunks; chunk++)
@@ -355,7 +388,9 @@ public:
         RETCODE FindFirstOf(Predicate predicate, size_t& out_Record)
         {
             if (!m_IsOpen)
+            {
                 return RTN_NULL_OBJ;
+            }
 
             bool found = false;
             size_t consecutive_skips = 0;
@@ -369,7 +404,10 @@ public:
                 if (consecutive_skips < READER_MAX_SKIP)
                 {
 #ifdef WINDOWS_PLATFORM
-                    if (RTN_OK != LockDB()) return RTN_LOCK_ERROR;
+                    if (RTN_OK != LockDB())
+                    {
+                        return RTN_LOCK_ERROR;
+                    }
                     consecutive_skips = 0;
 #else
                     if (0 == pthread_rwlock_tryrdlock(dbLock))
@@ -387,7 +425,9 @@ public:
                 else
                 {
                     if (RTN_OK != LockDB())
+                    {
                         return RTN_LOCK_ERROR;
+                    }
                     consecutive_skips = 0;
                 }
 
@@ -397,7 +437,10 @@ public:
                 for (size_t record = chunk_start; record < chunk_end; record++)
                 {
                     char* p = Get(record);
-                    if (nullptr == p) break;
+                    if (nullptr == p)
+                    {
+                        break;
+                    }
                     if (predicate(reinterpret_cast<const object*>(p)))
                     {
                         out_Record = record;
@@ -407,7 +450,9 @@ public:
                 }
 
                 if (RTN_OK != UnlockDB())
+                {
                     return RTN_LOCK_ERROR;
+                }
             }
 
             return found ? RTN_OK : RTN_NOT_FOUND;
@@ -420,20 +465,30 @@ public:
         RETCODE FindObjects(Predicate predicate, std::vector<object>& out_MatchingObjects)
         {
             if (!m_IsOpen)
+            {
                 return RTN_NULL_OBJ;
+            }
 
 #ifdef WINDOWS_PLATFORM
             size_t numThreads = std::thread::hardware_concurrency() / 2;
 #else
             size_t numThreads = static_cast<size_t>(sysconf(_SC_NPROCESSORS_ONLN)) / 2;
 #endif
-            if (0 == numThreads) numThreads = 1;
+            if (0 == numThreads)
+            {
+                numThreads = 1;
+            }
 
             size_t total_chunks = (m_NumRecords + m_ChunkRecords - 1) / m_ChunkRecords;
             if (0 == total_chunks)
+            {
                 return RTN_OK;
+            }
             numThreads = std::min(numThreads, total_chunks);
-            if (0 == numThreads) numThreads = 1;
+            if (0 == numThreads)
+            {
+                numThreads = 1;
+            }
 
             std::vector<std::thread> threads;
             std::vector<std::vector<object>> results(numThreads);
@@ -458,11 +513,17 @@ public:
             }
 
             for (std::thread& thread : threads)
+            {
                 thread.join();
+            }
 
             for (std::vector<object>& matches : results)
+            {
                 for (object& match : matches)
+                {
                     out_MatchingObjects.push_back(match);
+                }
+            }
 
             return RTN_OK;
         }
@@ -539,7 +600,9 @@ public:
             );
 
             if (hFile == INVALID_HANDLE_VALUE)
+            {
                 return;
+            }
 
             m_Size = static_cast<size_t>(GetFileSize(hFile, NULL));
             if (m_Size == INVALID_FILE_SIZE)
@@ -564,7 +627,9 @@ public:
             CloseHandle(hFile);
 
             if (nullptr == m_DBAddress)
+            {
                 return;
+            }
 
 #else
             m_PageSize = static_cast<size_t>(sysconf(_SC_PAGESIZE));
@@ -622,16 +687,26 @@ public:
         {
 #ifdef WINDOWS_PLATFORM
             if (nullptr != m_DataWindow)
+            {
                 UnmapViewOfFile(m_DataWindow);
+            }
             if (nullptr != m_DBAddress)
+            {
                 UnmapViewOfFile(m_DBAddress);
+            }
 #else
             if (nullptr != m_DataWindow)
+            {
                 munmap(m_DataWindow, m_WindowMappedBytes);
+            }
             if (nullptr != m_DBAddress)
+            {
                 munmap(m_DBAddress, m_PageSize);
+            }
             if (INVALID_FD != m_fd)
+            {
                 close(m_fd);
+            }
 #endif
             m_IsOpen     = false;
             m_DataWindow = nullptr;
@@ -649,13 +724,19 @@ protected:
 #ifdef WINDOWS_PLATFORM
         m_Mutex = CreateMutexA(NULL, FALSE, "MutexForFileLock");
         if (nullptr == m_Mutex)
+        {
             return RTN_LOCK_ERROR;
+        }
         if (WAIT_FAILED == WaitForSingleObject(m_Mutex, INFINITE))
+        {
             return RTN_LOCK_ERROR;
+        }
 #else
         int lockError = pthread_rwlock_rdlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
         if (0 != lockError)
+        {
             return RTN_LOCK_ERROR;
+        }
 #endif
         m_WindowMutex.lock();
         return RTN_OK;
@@ -669,11 +750,15 @@ protected:
         m_WindowMutex.unlock();
 #ifdef WINDOWS_PLATFORM
         if (!ReleaseMutex(m_Mutex))
+        {
             return RTN_LOCK_ERROR;
+        }
 #else
         int lockError = pthread_rwlock_unlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
         if (0 != lockError)
+        {
             return RTN_LOCK_ERROR;
+        }
 #endif
         return RTN_OK;
     }
@@ -683,13 +768,19 @@ protected:
 #ifdef WINDOWS_PLATFORM
         m_Mutex = CreateMutexA(NULL, FALSE, "MutexForFileLock");
         if (nullptr == m_Mutex)
+        {
             return RTN_LOCK_ERROR;
+        }
         if (WAIT_FAILED == WaitForSingleObject(m_Mutex, INFINITE))
+        {
             return RTN_LOCK_ERROR;
+        }
 #else
         int lockError = pthread_rwlock_wrlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
         if (0 != lockError)
+        {
             return RTN_LOCK_ERROR;
+        }
 #endif
         m_WindowMutex.lock();
         return RTN_OK;
@@ -719,7 +810,9 @@ protected:
         size_t map_bytes    = ((extra + data_bytes + m_PageSize - 1) / m_PageSize) * m_PageSize;
 
         if (aligned_off + map_bytes > m_Size)
+        {
             map_bytes = m_Size - aligned_off;
+        }
 
 #ifdef WINDOWS_PLATFORM
         // Full Windows windowed implementation requires storing the file HANDLE.
@@ -752,13 +845,17 @@ protected:
     char* Get(const size_t record)
     {
         if (!m_IsOpen || nullptr == m_DBAddress || record >= m_NumRecords)
+        {
             return nullptr;
+        }
 
         size_t chunk_index = record / m_ChunkRecords;
         if (chunk_index != m_WindowChunkIndex || nullptr == m_DataWindow)
         {
             if (!SlideWindow(record))
+            {
                 return nullptr;
+            }
         }
 
         size_t chunk_start = m_WindowChunkIndex * m_ChunkRecords;
@@ -815,7 +912,9 @@ protected:
             size_t data_bytes  = chunkRecords * sizeof(object);
             size_t map_bytes   = ((extra + data_bytes + pageSize - 1) / pageSize) * pageSize;
             if (aligned_off + map_bytes > fileSize)
+            {
                 map_bytes = fileSize - aligned_off;
+            }
 
             char* window = static_cast<char*>(mmap(nullptr, map_bytes,
                 PROT_READ | PROT_WRITE, MAP_SHARED, fd,
@@ -828,7 +927,9 @@ protected:
                     const object* obj = reinterpret_cast<const object*>(
                         window + extra + (r - chunk_start) * sizeof(object));
                     if (predicate(obj))
+                    {
                         results.push_back(*obj);
+                    }
                 }
                 munmap(window, map_bytes);
             }
