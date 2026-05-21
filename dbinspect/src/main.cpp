@@ -273,6 +273,11 @@ static int CmdWrite(char* base, size_t record,
 
     char writeBuf[65536] = {};
     size_t fieldBytes = desc.m_Count * TypeSize(desc.m_Type);
+    if (fieldBytes > sizeof(writeBuf))
+    {
+        fprintf(stderr, "field %s too large to write via this tool\n", fieldName);
+        return 1;
+    }
 
     if (desc.m_Type == 'c')
     {
@@ -457,6 +462,11 @@ int main(int argc, char** argv)
     if (fstat(fd, &st) < 0)
     {
         close(fd);
+        fprintf(stderr, "cannot open %s\n", dbPath);
+        return 1;
+    }
+    if (st.st_size <= 0)
+    {
         fprintf(stderr, "cannot open %s\n", dbPath);
         return 1;
     }
