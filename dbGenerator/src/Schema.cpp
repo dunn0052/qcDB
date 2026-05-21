@@ -314,60 +314,49 @@ size_t inline CalculatePadding(const OBJECT_SCHEMA& object, const FIELD_SCHEMA& 
 RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& databaseOutputDirectory)
 {
     std::string databaseFile = databaseOutputDirectory + object.objectName + CONSTANTS::DB_EXT;
-    size_t fileSize = sizeof(DBHeader) + object.objectSize * object.numberOfRecords;
+
+    uint32_t schemaSize = static_cast<uint32_t>(object.fields.size() * sizeof(FieldDescriptor));
+    size_t fileSize = sizeof(DBHeader) + schemaSize + object.objectSize * object.numberOfRecords;
 
     LOG_DEBUG(databaseFile, " is: ", fileSize, " bytes");
 
 #ifdef WINDOWS_PLATFORM
     HANDLE hFile = CreateFileA(databaseFile.c_str(),
                                GENERIC_READ | GENERIC_WRITE,
-                               0,
-                               NULL,
-                               OPEN_ALWAYS,
-                               FILE_ATTRIBUTE_NORMAL,
-                               NULL);
+                               0, NULL, OPEN_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
     LARGE_INTEGER li;
     li.QuadPart = fileSize;
     if (!SetFilePointerEx(hFile, li, NULL, FILE_BEGIN))
     {
-        LOG_FATAL("Could not set file pointer for file: ",
-            databaseFile,
-            " due to error: ",
-            ErrorString(GetLastError()));
+        LOG_FATAL("Could not set file pointer for file: ", databaseFile,
+                  " due to error: ", ErrorString(GetLastError()));
         CloseHandle(hFile);
         return RTN_MALLOC_FAIL;
     }
-
-    // Truncate the file to the current position, effectively setting the file size
     if (!SetEndOfFile(hFile))
     {
-        LOG_FATAL("Failed to truncate file: ",
-            databaseFile,
-            " due to error: ",
-            ErrorString(GetLastError()));
+        LOG_FATAL("Failed to truncate file: ", databaseFile,
+                  " due to error: ", ErrorString(GetLastError()));
         CloseHandle(hFile);
         return RTN_EOF;
     }
-
     li.QuadPart = 0;
     if (!SetFilePointerEx(hFile, li, NULL, FILE_BEGIN))
     {
-        LOG_FATAL("Could not reset pointer for file: ",
-            databaseFile,
-            " due to error: ",
-            ErrorString(GetLastError()));
+        LOG_FATAL("Could not reset pointer for file: ", databaseFile,
+                  " due to error: ", ErrorString(GetLastError()));
         CloseHandle(hFile);
         return RTN_MALLOC_FAIL;
     }
 #else
     int fd = open(databaseFile.c_str(), O_RDWR | O_CREAT, CONSTANTS::RW);
-    if( 0 > fd )
+    if (0 > fd)
     {
         LOG_WARN("Failed to open or create ", databaseFile);
-        return  RTN_NOT_FOUND;
+        return RTN_NOT_FOUND;
     }
-
-    if(ftruncate64(fd, fileSize))
+    if (ftruncate64(fd, fileSize))
     {
         LOG_WARN("Failed to truncate ", databaseFile, " to size ", fileSize);
         close(fd);
@@ -375,53 +364,44 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
     }
 #endif
 
+    // Build header
     DBHeader dbHeader = { 0 };
     dbHeader.m_NumRecords = object.numberOfRecords;
+    dbHeader.m_SchemaSize = schemaSize;
+    dbHeader.m_RecordSize = static_cast<uint32_t>(object.objectSize);
+    dbHeader.m_NumFields  = static_cast<uint8_t>(object.fields.size());
 
 #ifdef WINDOWS_PLATFORM
-
-    int error = strncpy_s(dbHeader.m_ObjectName, object.objectName.c_str(), object.objectName.length());
-    if(error)
+    int error = strncpy_s(dbHeader.m_ObjectName, object.objectName.c_str(),
+                          object.objectName.length());
+    if (error)
     {
-        LOG_FATAL("Could not write object name: ",
-            object.objectName,
-            " to DBHeader due to error: ",
-            ErrorString(error));
+        LOG_FATAL("Could not write object name: ", object.objectName,
+                  " to DBHeader due to error: ", ErrorString(error));
     }
-
     DWORD numbytes = 0;
-    if (!WriteFile(hFile, &dbHeader, sizeof(DBHeader), &numbytes, NULL))
+    if (!WriteFile(hFile, &dbHeader, sizeof(DBHeader), &numbytes, NULL) ||
+        sizeof(DBHeader) != numbytes)
     {
-        LOG_FATAL("Failed to write DBHeader to file: ",
-            databaseFile,
-            " due to error: ",
-            ErrorString(errno));
-        CloseHandle(hFile);
-        return RTN_EOF;
-    }
-
-    if(sizeof(DBHeader) != numbytes)
-    {
-        LOG_FATAL("Could not write DBHeader for: ",
-            object.objectName);
+        LOG_FATAL("Failed to write DBHeader to file: ", databaseFile);
         CloseHandle(hFile);
         return RTN_EOF;
     }
 #else
-
     strncpy(dbHeader.m_ObjectName, object.objectName.c_str(), object.objectName.length());
 
     pthread_rwlockattr_t dbLockAttributest = {0};
     pthread_rwlockattr_init(&dbLockAttributest);
     pthread_rwlockattr_setpshared(&dbLockAttributest, PTHREAD_PROCESS_SHARED);
 #ifndef WINDOWS_PLATFORM
-    pthread_rwlockattr_setkind_np(&dbLockAttributest, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+    pthread_rwlockattr_setkind_np(&dbLockAttributest,
+                                  PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
 #endif
     pthread_rwlock_init(&dbHeader.m_DBLock, &dbLockAttributest);
     pthread_rwlockattr_destroy(&dbLockAttributest);
-    size_t numbytes = write(fd, static_cast<void*>(&dbHeader), sizeof(DBHeader));
 
-    if(sizeof(DBHeader) != numbytes)
+    size_t numbytes = write(fd, static_cast<void*>(&dbHeader), sizeof(DBHeader));
+    if (sizeof(DBHeader) != numbytes)
     {
         close(fd);
         LOG_FATAL("Failed to create DB header for: ", object.objectName);
@@ -429,26 +409,54 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
     }
 #endif
 
-#ifdef WINDOWS_PLATFORM
-    if(!CloseHandle(hFile))
+    // Build and write FieldDescriptor array
+    std::vector<FieldDescriptor> descriptors;
+    descriptors.reserve(object.fields.size());
+    for (const FIELD_SCHEMA& field : object.fields)
     {
-        LOG_WARN("Failed to close ",
-            databaseFile,
-            " due to error: ",
-            ErrorString(GetLastError()));
+        FieldDescriptor desc = {};
+        strncpy(desc.m_Name, field.fieldName.c_str(), sizeof(desc.m_Name) - 1);
+        desc.m_Type        = field.fieldType;
+        desc.m_Count       = static_cast<uint16_t>(field.numElements);
+        desc.m_FieldOffset = static_cast<uint16_t>(field.fieldOffset);
+        if (field.fieldName == "RECORD_NUMBER" || field.fieldName == "LAST_MODIFIED")
+        {
+            desc.m_Flags = FIELD_FLAG_READONLY | FIELD_FLAG_METADATA;
+        }
+        descriptors.push_back(desc);
+    }
+
+#ifdef WINDOWS_PLATFORM
+    DWORD schemaBytes = 0;
+    if (!WriteFile(hFile, descriptors.data(), schemaSize, &schemaBytes, NULL) ||
+        schemaSize != schemaBytes)
+    {
+        LOG_FATAL("Failed to write schema block for: ", object.objectName);
+        CloseHandle(hFile);
+        return RTN_EOF;
+    }
+    if (!CloseHandle(hFile))
+    {
+        LOG_WARN("Failed to close ", databaseFile,
+                 " due to error: ", ErrorString(GetLastError()));
         return RTN_FAIL;
     }
 #else
-    if(close(fd))
+    size_t schemaWritten = write(fd, descriptors.data(), schemaSize);
+    if (schemaSize != schemaWritten)
+    {
+        close(fd);
+        LOG_FATAL("Failed to write schema block for: ", object.objectName);
+        return RTN_EOF;
+    }
+    if (close(fd))
     {
         LOG_WARN("Failed to close ", databaseFile);
         return RTN_FAIL;
     }
 #endif
 
-
     LOG_INFO("Generated: ", databaseFile);
-
     return RTN_OK;
 }
 
@@ -572,13 +580,29 @@ RETCODE GenerateDatabase(const std::string& schemaPath, const std::string& heade
 
     // Recalculate objectSize from scratch with metadata at the front
     object.objectSize = 0;
-    for(const FIELD_SCHEMA& field : object.fields)
+    for(FIELD_SCHEMA& field : object.fields)
     {
         size_t padding = CalculatePadding(object, field);
+        field.fieldOffset = object.objectSize + padding;  // byte offset within struct
         object.objectSize += padding + field.fieldSize;
     }
 
     LOG_DEBUG("OBJECT: ", object.objectName, " size is: ", object.objectSize, " bytes per record");
+
+    if(object.fields.size() > MAX_SCHEMA_FIELDS)
+    {
+        LOG_FATAL("Schema has ", object.fields.size(), " fields; maximum is ", MAX_SCHEMA_FIELDS);
+        return RTN_BAD_ARG;
+    }
+
+    for(const FIELD_SCHEMA& field : object.fields)
+    {
+        if(field.fieldName.length() > 31)
+        {
+            LOG_FATAL("Field name '", field.fieldName, "' exceeds 31 characters");
+            return RTN_BAD_ARG;
+        }
+    }
 
     retcode = GenerateHeader(object, headerOutputPath);
     if(RTN_OK != retcode)
