@@ -354,41 +354,67 @@ public:
          */
         RETCODE FindFirstOf(Predicate predicate, size_t& out_Record)
         {
-            RETCODE retcode = RTN_OK;
-            bool found = false;
-            retcode = LockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
+            if (!m_IsOpen)
+                return RTN_NULL_OBJ;
 
-            const object* currentObject = reinterpret_cast<const object*>(m_DBAddress + sizeof(DBHeader));
-            size_t size = reinterpret_cast<DBHeader*>(m_DBAddress)->m_Size;
-            size_t record = 0;
-            for (record = 0; record <= size; record++)
+            bool found = false;
+            size_t consecutive_skips = 0;
+            size_t total_chunks = (m_NumRecords + m_ChunkRecords - 1) / m_ChunkRecords;
+#ifndef WINDOWS_PLATFORM
+            pthread_rwlock_t* dbLock = &reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock;
+#endif
+
+            for (size_t chunk = 0; chunk < total_chunks && !found; chunk++)
             {
-                if (predicate(currentObject))
+                bool acquired = false;
+                if (consecutive_skips < READER_MAX_SKIP)
                 {
-                    out_Record = record;
-                    found = true;
-                    break;
+#ifdef WINDOWS_PLATFORM
+                    if (RTN_OK != LockDB()) return RTN_LOCK_ERROR;
+                    acquired = true;
+                    consecutive_skips = 0;
+#else
+                    if (0 == pthread_rwlock_tryrdlock(dbLock))
+                    {
+                        m_WindowMutex.lock();
+                        acquired = true;
+                        consecutive_skips = 0;
+                    }
+                    else
+                    {
+                        ++consecutive_skips;
+                        continue;
+                    }
+#endif
+                }
+                else
+                {
+                    if (RTN_OK != LockDB())
+                        return RTN_LOCK_ERROR;
+                    acquired = true;
+                    consecutive_skips = 0;
                 }
 
-                currentObject++;
+                size_t chunk_start = chunk * m_ChunkRecords;
+                size_t chunk_end   = std::min(chunk_start + m_ChunkRecords, m_NumRecords);
+
+                for (size_t record = chunk_start; record < chunk_end; record++)
+                {
+                    char* p = Get(record);
+                    if (nullptr == p) break;
+                    if (predicate(reinterpret_cast<const object*>(p)))
+                    {
+                        out_Record = record;
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (RTN_OK != UnlockDB())
+                    return RTN_LOCK_ERROR;
             }
 
-            retcode = UnlockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
-
-            if(!found)
-            {
-                return RTN_NOT_FOUND;
-            }
-
-            return RTN_OK;
+            return found ? RTN_OK : RTN_NOT_FOUND;
         }
 
         /*
