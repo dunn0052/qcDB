@@ -591,7 +591,8 @@ public:
             m_DBAddress(nullptr), m_NumRecords(0),
             m_fd(INVALID_FD), m_DataWindow(nullptr),
             m_WindowChunkIndex(SIZE_MAX), m_WindowMappedBytes(0),
-            m_WindowExtra(0), m_ChunkRecords(1), m_PageSize(4096)
+            m_WindowExtra(0), m_ChunkRecords(1), m_PageSize(4096),
+            m_SchemaOffset(0)
 #ifdef WINDOWS_PLATFORM
             , m_Mutex(INVALID_HANDLE_VALUE)
 #endif
@@ -675,7 +676,39 @@ public:
                 return;
             }
 #endif
-            m_NumRecords = reinterpret_cast<DBHeader*>(m_DBAddress)->m_NumRecords;
+            DBHeader* hdr = reinterpret_cast<DBHeader*>(m_DBAddress);
+            m_NumRecords = hdr->m_NumRecords;
+
+            // Validate record size matches this template instantiation
+            if (hdr->m_RecordSize != static_cast<uint32_t>(sizeof(object)))
+            {
+#ifdef WINDOWS_PLATFORM
+                UnmapViewOfFile(m_DBAddress);
+#else
+                munmap(m_DBAddress, m_PageSize);
+                close(m_fd);
+                m_fd = INVALID_FD;
+#endif
+                m_DBAddress = nullptr;
+                return;
+            }
+
+            // Validate schema block invariant
+            if (hdr->m_SchemaSize !=
+                static_cast<uint32_t>(hdr->m_NumFields * sizeof(FieldDescriptor)))
+            {
+#ifdef WINDOWS_PLATFORM
+                UnmapViewOfFile(m_DBAddress);
+#else
+                munmap(m_DBAddress, m_PageSize);
+                close(m_fd);
+                m_fd = INVALID_FD;
+#endif
+                m_DBAddress = nullptr;
+                return;
+            }
+
+            m_SchemaOffset = hdr->m_SchemaSize;
             m_ChunkRecords = std::max(size_t(1), m_PageSize / sizeof(object));
 
             // Map initial data window (chunk 0) if DB has records
@@ -815,7 +848,7 @@ protected:
 #endif
         size_t chunk_index  = record / m_ChunkRecords;
         size_t chunk_start  = chunk_index * m_ChunkRecords;
-        size_t file_offset  = sizeof(DBHeader) + chunk_start * sizeof(object);
+        size_t file_offset  = sizeof(DBHeader) + m_SchemaOffset + chunk_start * sizeof(object);
         size_t aligned_off  = (file_offset / m_PageSize) * m_PageSize;
         size_t extra        = file_offset - aligned_off;
         size_t data_bytes   = m_ChunkRecords * sizeof(object);
@@ -983,6 +1016,7 @@ protected:
     size_t m_WindowExtra;        // pad bytes from window base to first record in chunk
     size_t m_ChunkRecords;       // records per chunk (derived from m_PageSize)
     size_t m_PageSize;           // OS alignment granularity
+    size_t m_SchemaOffset;       // bytes of schema block after DBHeader (= m_SchemaSize)
 
     std::mutex m_WindowMutex;    // serializes window slides within a process
 
