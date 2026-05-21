@@ -33,14 +33,14 @@ Additionally, the current single read lock held for entire scan operations means
 
 ## Architecture
 
-### Two-Path Strategy (Internal, Not Visible to Callers)
+### Always-Windowed Strategy
 
-At construction, compute `data_size = num_records * sizeof(object)`. Compare to an internal threshold (4 MB):
+All databases use chunked windowed mmap regardless of size. No threshold, no two-path branching.
 
-- **Full-map path** (`data_size <= 4 MB`): mmap entire file without `MAP_POPULATE`. Add `madvise(MADV_RANDOM)` on the data region. All existing code paths unchanged. No new overhead.
-- **Windowed path** (`data_size > 4 MB`): mmap the header in a permanent small mapping. Map data in a sliding chunk window. File descriptor kept open for remapping.
+For small databases where `total_records <= m_ChunkRecords`, the window covers the entire data region in a single mmap and never slides — behavior is identical to a full mmap but without `MAP_POPULATE`. The simplification eliminates an arbitrary size constant and one entire code branch.
 
-The threshold is a compile-time internal constant, not exposed to callers.
+- Header: permanent pinned mmap (`ceil(sizeof(DBHeader), m_PageSize)` bytes)
+- Data: sliding chunk window; fd kept open for remapping
 
 ### File Layout (Unchanged)
 
@@ -84,11 +84,10 @@ Examples:
 
 ## Window Management
 
-### New Member Fields (Windowed Path Only)
+### New Member Fields
 
 ```cpp
-bool   m_IsWindowed;           // which path is active
-int    m_fd;                   // kept open for remapping (INVALID_FD on full-map path)
+int    m_fd;                   // kept open for remapping
 char*  m_DataWindow;           // current data chunk mmap base address
 size_t m_WindowChunkIndex;     // which chunk is currently mapped
 size_t m_WindowMappedBytes;    // total bytes currently mmap'd for data window
@@ -183,7 +182,7 @@ for each group:
     advance to next group
 ```
 
-Total: 3 mmap operations instead of mapping the full file. On the full-map path, grouping is skipped — `Get()` called per record as today.
+Total: 3 mmap operations instead of mapping the full file.
 
 ### Scan-for-Empty Write Overloads
 
@@ -226,7 +225,7 @@ static void FinderThread(Predicate predicate,
                          std::vector<object>& results);
 ```
 
-On the full-map path, `FinderThread` is unchanged (no fd or mmap management needed).
+All `FindObjects` calls use this thread signature — no separate full-map variant.
 
 ---
 
@@ -293,7 +292,7 @@ The file rwlock is process-shared and allows multiple threads in the same proces
 
 Fix: `LockDB()` and `WriteLockDB()` also acquire `m_WindowMutex` (a `std::mutex` member) after acquiring the file rwlock, in windowed mode only. `UnlockDB()` releases `m_WindowMutex` before releasing the file rwlock. `Get()` is then always called while holding both.
 
-Effect: windowed-mode single-record ops serialize within a process. Acceptable — the target workload bottleneck is cross-process, not intra-thread. `FindObjects` parallel threads are unaffected (thread-local mmaps, no shared window).
+Effect: single-record ops serialize within a process. Acceptable — the target workload bottleneck is cross-process, not intra-thread. `FindObjects` parallel threads are unaffected (thread-local mmaps, no shared window).
 
 ### Concurrency Scenario Summary
 
@@ -318,8 +317,6 @@ Effect: windowed-mode single-record ops serialize within a process. Acceptable �
 | `tryrdlock` fails in scan | Skip chunk; increment `consecutive_skips` — expected, not an error |
 | Blocking `rdlock` fails after max skips | Return `RTN_LOCK_ERROR` — same as today |
 | `FindObjects` thread-local mmap fails | Thread pushes nothing to results; main thread returns `RTN_OK` with partial results — consistent with existing behavior |
-| Full-map path mmap fails | `m_IsOpen = false` — same as today |
-
 No new `RETCODE` values required. Windowed mmap failure surfaces as `RTN_NULL_OBJ`.
 
 ---
@@ -328,6 +325,6 @@ No new `RETCODE` values required. Windowed mmap failure surfaces as `RTN_NULL_OB
 
 | File | Change |
 |---|---|
-| `qcDB/qcDB.hh` | Add windowed mmap members; `SlideWindow()`; fix `Get()` call order; chunk-grouped bulk ops; per-chunk scan lock; `m_WindowMutex` in `LockDB`/`UnlockDB`/`WriteLockDB`; updated `FinderThread` signature |
+| `qcDB/qcDB.hh` | Replace full mmap with pinned header + sliding chunk window; add `SlideWindow()`; fix `Get()` call order; chunk-grouped bulk ops; per-chunk scan lock; `m_WindowMutex` in `LockDB`/`UnlockDB`/`WriteLockDB`; updated `FinderThread` signature |
 | `common/DBHeader.hh` | No struct changes |
 | `dbGenerator/` | Init rwlock with `PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP` on Linux |
