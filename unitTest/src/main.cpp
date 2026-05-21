@@ -48,6 +48,7 @@ static bool CreateTestDB(const char* path, size_t num_records)
 static bool TestSingleRecordWriteRead(const char* path);
 static bool TestCrossChunkAccess(const char* path);
 static bool TestBulkReadObjects(const char* path);
+static bool TestWriteObjects(const char* path);
 static bool TestFindFirstOf(const char* path);
 static bool TestDeleteObject(const char* path);
 static bool TestClear(const char* path);
@@ -66,6 +67,7 @@ int main()
     pass &= TestSingleRecordWriteRead(dbPath);
     pass &= TestCrossChunkAccess(dbPath);
     pass &= TestBulkReadObjects(dbPath);
+    pass &= TestWriteObjects(dbPath);
     pass &= TestFindFirstOf(dbPath);
     pass &= TestDeleteObject(dbPath);
     pass &= TestClear(dbPath);
@@ -78,6 +80,7 @@ int main()
 static bool TestSingleRecordWriteRead(const char* path)
 {
     qcDB::dbInterface<TestRecord> db(path);
+    db.Clear();
     TEST_ASSERT(db.NumberOfRecords() == 300, "NumberOfRecords should be 300");
 
     TestRecord w = {};
@@ -97,6 +100,7 @@ static bool TestSingleRecordWriteRead(const char* path)
 static bool TestCrossChunkAccess(const char* path)
 {
     qcDB::dbInterface<TestRecord> db(path);
+    db.Clear();
 
     // Write records in different chunks
     TestRecord w0 = {}; w0.id = 10; strncpy(w0.name, "CHUNK0", 28);
@@ -126,6 +130,7 @@ static bool TestCrossChunkAccess(const char* path)
 static bool TestBulkReadObjects(const char* path)
 {
     qcDB::dbInterface<TestRecord> db(path);
+    db.Clear();
 
     TestRecord w50 = {}; w50.id = 50; strncpy(w50.name, "FIFTY",   28);
     TestRecord w150 = {}; w150.id = 150; strncpy(w150.name, "ONEFIFTY", 28);
@@ -154,9 +159,34 @@ static bool TestBulkReadObjects(const char* path)
     return true;
 }
 
+static bool TestWriteObjects(const char* path)
+{
+    qcDB::dbInterface<TestRecord> db(path);
+    db.Clear();
+
+    TestRecord a = {}; a.id = 11; strncpy(a.name, "WOBJ_A", 28);
+    TestRecord b = {}; b.id = 22; strncpy(b.name, "WOBJ_B", 28);
+    TestRecord c = {}; c.id = 33; strncpy(c.name, "WOBJ_C", 28);
+    std::vector<TestRecord> toWrite = {a, b, c};
+
+    TEST_ASSERT(RTN_OK == db.WriteObjects(toWrite), "WriteObjects failed");
+
+    size_t found = 0;
+    TEST_ASSERT(RTN_OK == db.FindFirstOf([](const TestRecord* r){ return r->id == 11; }, found),
+        "FindFirstOf id=11 not found after WriteObjects");
+    TEST_ASSERT(RTN_OK == db.FindFirstOf([](const TestRecord* r){ return r->id == 22; }, found),
+        "FindFirstOf id=22 not found after WriteObjects");
+    TEST_ASSERT(RTN_OK == db.FindFirstOf([](const TestRecord* r){ return r->id == 33; }, found),
+        "FindFirstOf id=33 not found after WriteObjects");
+
+    fprintf(stdout, "PASS: TestWriteObjects\n");
+    return true;
+}
+
 static bool TestFindFirstOf(const char* path)
 {
     qcDB::dbInterface<TestRecord> db(path);
+    db.Clear();
 
     TestRecord w = {}; w.id = 9999; strncpy(w.name, "NEEDLE", 28);
     TEST_ASSERT(RTN_OK == db.WriteObject(175, w), "WriteObject(175) failed");
@@ -175,6 +205,7 @@ static bool TestFindFirstOf(const char* path)
 static bool TestDeleteObject(const char* path)
 {
     qcDB::dbInterface<TestRecord> db(path);
+    db.Clear();
 
     TestRecord w = {}; w.id = 77; strncpy(w.name, "DEL", 28);
     TEST_ASSERT(RTN_OK == db.WriteObject(250, w), "WriteObject(250) failed");
