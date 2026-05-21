@@ -613,6 +613,12 @@ RETCODE GenerateDatabase(const std::string& schemaPath, const std::string& heade
                       " exceeds uint16_t maximum — record struct too large");
             return RTN_BAD_ARG;
         }
+        if(field.numElements > UINT16_MAX)
+        {
+            LOG_FATAL("Field '", field.fieldName, "' element count ", field.numElements,
+                      " exceeds uint16_t maximum");
+            return RTN_BAD_ARG;
+        }
     }
 
     retcode = GenerateHeader(object, headerOutputPath);
