@@ -366,18 +366,15 @@ public:
 
             for (size_t chunk = 0; chunk < total_chunks && !found; chunk++)
             {
-                bool acquired = false;
                 if (consecutive_skips < READER_MAX_SKIP)
                 {
 #ifdef WINDOWS_PLATFORM
                     if (RTN_OK != LockDB()) return RTN_LOCK_ERROR;
-                    acquired = true;
                     consecutive_skips = 0;
 #else
                     if (0 == pthread_rwlock_tryrdlock(dbLock))
                     {
                         m_WindowMutex.lock();
-                        acquired = true;
                         consecutive_skips = 0;
                     }
                     else
@@ -391,7 +388,6 @@ public:
                 {
                     if (RTN_OK != LockDB())
                         return RTN_LOCK_ERROR;
-                    acquired = true;
                     consecutive_skips = 0;
                 }
 
