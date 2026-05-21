@@ -38,28 +38,22 @@ public:
          */
         RETCODE ReadObject(size_t record, object& out_object)
         {
-            RETCODE retcode = RTN_OK;
+            if (!m_IsOpen || record >= m_NumRecords)
+                return RTN_NULL_OBJ;
+
+            RETCODE retcode = LockDB();
+            if (RTN_OK != retcode)
+                return retcode;
+
             char* p_object = Get(record);
-            if(nullptr == p_object)
+            if (nullptr == p_object)
             {
+                UnlockDB();
                 return RTN_NULL_OBJ;
             }
 
-            retcode = LockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
-
             memcpy(&out_object, p_object, sizeof(object));
-
-            retcode = UnlockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
-
-            return RTN_OK;
+            return UnlockDB();
         }
 
         /*
@@ -108,35 +102,27 @@ public:
          */
         RETCODE WriteObject(size_t record, object& objectWrite)
         {
-            RETCODE retcode = RTN_OK;
-            char* p_object = Get(record);
-            if(nullptr == p_object)
-            {
+            if (!m_IsOpen || record >= m_NumRecords)
                 return RTN_NULL_OBJ;
-            }
 
-            retcode = WriteLockDB();
+            RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
-            {
                 return retcode;
+
+            char* p_object = Get(record);
+            if (nullptr == p_object)
+            {
+                UnlockDB();
+                return RTN_NULL_OBJ;
             }
 
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
             header->m_LastWritten = record;
             if (header->m_Size < record)
-            {
                 header->m_Size = record;
-            }
 
             memcpy(p_object, &objectWrite, sizeof(object));
-
-            retcode = UnlockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
-
-            return RTN_OK;
+            return UnlockDB();
         }
 
         /*
@@ -296,53 +282,43 @@ public:
          */
         RETCODE DeleteObject(size_t record)
         {
-            RETCODE retcode = RTN_OK;
-            object deletedObject = { 0 };
+            if (!m_IsOpen || record >= m_NumRecords)
+                return RTN_NULL_OBJ;
+
+            RETCODE retcode = WriteLockDB();
+            if (RTN_OK != retcode)
+                return retcode;
+
             char* p_object = Get(record);
             if (nullptr == p_object)
             {
+                UnlockDB();
                 return RTN_NULL_OBJ;
             }
 
-            retcode = WriteLockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
             size_t size = header->m_Size;
+            object deletedObject = {};
 
             memset(p_object, 0, sizeof(object));
 
-            // If the deleted record was the last one, find the next last record
             if (size == record)
             {
-                for (p_object -= sizeof(object);
-                     p_object >= m_DBAddress + sizeof(DBHeader);
-                     p_object -= sizeof(object))
+                size_t newSize = 0;
+                for (size_t i = record; i-- > 0;)
                 {
-                    --record;
-                    if (memcmp(p_object, &deletedObject, sizeof(object)) != 0)
+                    char* p = Get(i);
+                    if (nullptr == p) break;
+                    if (memcmp(p, &deletedObject, sizeof(object)) != 0)
                     {
+                        newSize = i;
                         break;
                     }
                 }
-
-                if (p_object < m_DBAddress + sizeof(DBHeader))
-                {
-                    record = 0;
-                }
-
-                header->m_Size = record;
+                header->m_Size = newSize;
             }
 
-            retcode = UnlockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
-
-            return RTN_OK;
+            return UnlockDB();
         }
 
         /*
@@ -669,22 +645,15 @@ protected:
 #ifdef WINDOWS_PLATFORM
         m_Mutex = CreateMutexA(NULL, FALSE, "MutexForFileLock");
         if (nullptr == m_Mutex)
-        {
             return RTN_LOCK_ERROR;
-        }
         if (WAIT_FAILED == WaitForSingleObject(m_Mutex, INFINITE))
-        {
             return RTN_LOCK_ERROR;
-        }
 #else
-
         int lockError = pthread_rwlock_rdlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
         if (0 != lockError)
-        {
             return RTN_LOCK_ERROR;
-        }
 #endif
-
+        m_WindowMutex.lock();
         return RTN_OK;
     }
 
@@ -693,20 +662,16 @@ protected:
      */
     RETCODE UnlockDB(void)
     {
+        m_WindowMutex.unlock();
 #ifdef WINDOWS_PLATFORM
         if (!ReleaseMutex(m_Mutex))
-        {
             return RTN_LOCK_ERROR;
-        }
 #else
         int lockError = pthread_rwlock_unlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
         if (0 != lockError)
-        {
             return RTN_LOCK_ERROR;
-        }
 #endif
-
-    return RTN_OK;
+        return RTN_OK;
     }
 
     RETCODE WriteLockDB(void)
@@ -714,21 +679,15 @@ protected:
 #ifdef WINDOWS_PLATFORM
         m_Mutex = CreateMutexA(NULL, FALSE, "MutexForFileLock");
         if (nullptr == m_Mutex)
-        {
             return RTN_LOCK_ERROR;
-        }
         if (WAIT_FAILED == WaitForSingleObject(m_Mutex, INFINITE))
-        {
             return RTN_LOCK_ERROR;
-        }
 #else
         int lockError = pthread_rwlock_wrlock(&reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock);
         if (0 != lockError)
-        {
             return RTN_LOCK_ERROR;
-        }
 #endif
-
+        m_WindowMutex.lock();
         return RTN_OK;
     }
 
