@@ -3,6 +3,7 @@
 
 #include <common/OSdefines.hh>
 #include <cstdint>
+#include <cstddef>
 
 #ifdef WINDOWS_PLATFORM
 using pthread_rwlock_t = char[80];
@@ -56,5 +57,6 @@ struct DBHeader
     uint8_t  m_NumFields;      // number of FieldDescriptors following this header
     uint8_t  _pad[7];          // explicit padding, must be zero
 };
+static_assert(sizeof(DBHeader) % 8 == 0, "DBHeader must be 8-byte aligned");
 
 #endif
