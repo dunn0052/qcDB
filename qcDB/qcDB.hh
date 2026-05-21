@@ -6,6 +6,7 @@
 #include <string>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #ifdef WINDOWS_PLATFORM
 #include <Windows.h>
@@ -16,6 +17,8 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <mutex>
+#include <climits>
 #include <thread>
 #include <vector>
 
@@ -761,17 +764,28 @@ protected:
         }
     }
 
-    bool m_IsOpen;
+    bool   m_IsOpen;
     size_t m_Size;
     size_t m_NumRecords;
-    char* m_DBAddress;
+    char*  m_DBAddress;      // pinned header mapping (one page, permanent)
+
+    // Windowed data mapping
+    int    m_fd;             // kept open for remapping; INVALID_FD on close
+    char*  m_DataWindow;     // current data chunk mmap base
+    size_t m_WindowChunkIndex;   // which chunk is currently mapped
+    size_t m_WindowMappedBytes;  // bytes currently mmap'd for data window
+    size_t m_WindowExtra;        // pad bytes from window base to first record in chunk
+    size_t m_ChunkRecords;       // records per chunk (derived from m_PageSize)
+    size_t m_PageSize;           // OS alignment granularity
+
+    std::mutex m_WindowMutex;    // serializes window slides within a process
 
 #ifdef WINDOWS_PLATFORM
     HANDLE m_Mutex;
-#else
 #endif
 
-    static constexpr int INVALID_FD = -1;
+    static constexpr int    INVALID_FD       = -1;
+    static constexpr size_t READER_MAX_SKIP  = 5;
 
     };
 }
