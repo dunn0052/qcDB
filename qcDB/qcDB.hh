@@ -423,56 +423,50 @@ public:
          */
         RETCODE FindObjects(Predicate predicate, std::vector<object>& out_MatchingObjects)
         {
-            RETCODE retcode = RTN_OK;
-            // Number of threads /2 so we don't completely lock up the CPU
+            if (!m_IsOpen)
+                return RTN_NULL_OBJ;
+
 #ifdef WINDOWS_PLATFORM
             size_t numThreads = std::thread::hardware_concurrency() / 2;
 #else
-            size_t numThreads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+            size_t numThreads = static_cast<size_t>(sysconf(_SC_NPROCESSORS_ONLN)) / 2;
 #endif
-            if (0 == numThreads)
-            {
-                numThreads = 1;
-            }
+            if (0 == numThreads) numThreads = 1;
+
+            size_t total_chunks = (m_NumRecords + m_ChunkRecords - 1) / m_ChunkRecords;
+            if (0 == total_chunks)
+                return RTN_OK;
+            numThreads = std::min(numThreads, total_chunks);
+            if (0 == numThreads) numThreads = 1;
+
             std::vector<std::thread> threads;
             std::vector<std::vector<object>> results(numThreads);
 
-            retcode = LockDB();
-            if (RTN_OK != retcode)
+            pthread_rwlock_t* dbLock =
+                &reinterpret_cast<DBHeader*>(m_DBAddress)->m_DBLock;
+
+            size_t chunksPerThread = total_chunks / numThreads;
+
+            for (size_t threadIndex = 0; threadIndex < numThreads; threadIndex++)
             {
-                return retcode;
+                size_t startChunk = threadIndex * chunksPerThread;
+                size_t endChunk   = (threadIndex == numThreads - 1)
+                                    ? total_chunks
+                                    : startChunk + chunksPerThread;
+                size_t startRecord = startChunk * m_ChunkRecords;
+                size_t endRecord   = std::min(endChunk * m_ChunkRecords, m_NumRecords);
+
+                threads.emplace_back(FinderThread, predicate, m_fd, dbLock,
+                    startRecord, endRecord, m_ChunkRecords,
+                    m_PageSize, m_Size, std::ref(results[threadIndex]));
             }
-
-            const object* currentObject = reinterpret_cast<const object*>(m_DBAddress + sizeof(DBHeader));
-            size_t size = reinterpret_cast<DBHeader*>(m_DBAddress)->m_Size;
-            size_t segmentSize = size / numThreads;
-
-            for (size_t threadIndex = 0; threadIndex < numThreads - 1; threadIndex++)
-            {
-                threads.emplace_back(FinderThread, predicate, currentObject, segmentSize, std::ref(results[threadIndex]));
-                currentObject += segmentSize;
-            }
-
-            threads.emplace_back(FinderThread, predicate, currentObject, size + 1 - ((numThreads - 1) * segmentSize), std::ref(results[numThreads - 1]));
 
             for (std::thread& thread : threads)
-            {
                 thread.join();
-            }
-
-            retcode = UnlockDB();
-            if (RTN_OK != retcode)
-            {
-                return retcode;
-            }
 
             for (std::vector<object>& matches : results)
-            {
                 for (object& match : matches)
-                {
                     out_MatchingObjects.push_back(match);
-                }
-            }
 
             return RTN_OK;
         }
@@ -773,16 +767,74 @@ protected:
      * Internal thread function that is used to run the predicate
      * in parallel in the sharded database.
      */
-    static void FinderThread(Predicate predicate, const object* currentObject, size_t numRecords, std::vector<object>& results)
+    static void FinderThread(Predicate predicate,
+                             int fd,
+                             pthread_rwlock_t* dbLock,
+                             size_t startRecord,
+                             size_t endRecord,
+                             size_t chunkRecords,
+                             size_t pageSize,
+                             size_t fileSize,
+                             std::vector<object>& results)
     {
-        for (size_t record = 0; record < numRecords; record++)
+#ifdef WINDOWS_PLATFORM
+        (void)fd; (void)dbLock; (void)startRecord; (void)endRecord;
+        (void)chunkRecords; (void)pageSize; (void)fileSize;
+        return;
+#else
+        size_t consecutive_skips = 0;
+        size_t record = startRecord;
+
+        while (record < endRecord)
         {
-            if (predicate(currentObject))
+            size_t chunk_index = record / chunkRecords;
+            size_t chunk_start = chunk_index * chunkRecords;
+            size_t chunk_end   = std::min(chunk_start + chunkRecords, endRecord);
+
+            if (consecutive_skips < READER_MAX_SKIP)
             {
-                results.push_back(*currentObject);
+                if (0 != pthread_rwlock_tryrdlock(dbLock))
+                {
+                    ++consecutive_skips;
+                    record = chunk_end;
+                    continue;
+                }
+                consecutive_skips = 0;
             }
-            currentObject++;
+            else
+            {
+                pthread_rwlock_rdlock(dbLock);
+                consecutive_skips = 0;
+            }
+
+            size_t file_offset = sizeof(DBHeader) + chunk_start * sizeof(object);
+            size_t aligned_off = (file_offset / pageSize) * pageSize;
+            size_t extra       = file_offset - aligned_off;
+            size_t data_bytes  = chunkRecords * sizeof(object);
+            size_t map_bytes   = ((extra + data_bytes + pageSize - 1) / pageSize) * pageSize;
+            if (aligned_off + map_bytes > fileSize)
+                map_bytes = fileSize - aligned_off;
+
+            char* window = static_cast<char*>(mmap(nullptr, map_bytes,
+                PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                static_cast<off_t>(aligned_off)));
+
+            if (MAP_FAILED != window)
+            {
+                for (size_t r = record; r < chunk_end; r++)
+                {
+                    const object* obj = reinterpret_cast<const object*>(
+                        window + extra + (r - chunk_start) * sizeof(object));
+                    if (predicate(obj))
+                        results.push_back(*obj);
+                }
+                munmap(window, map_bytes);
+            }
+
+            pthread_rwlock_unlock(dbLock);
+            record = chunk_end;
         }
+#endif
     }
 
     bool   m_IsOpen;
