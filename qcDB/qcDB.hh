@@ -826,13 +826,14 @@ protected:
             map_bytes = m_Size - aligned_off;
         }
 
+        char* window = nullptr;
 #ifdef WINDOWS_PLATFORM
         // Full Windows windowed implementation requires storing the file HANDLE.
         // Stub: mark closed so callers fall back gracefully.
         m_IsOpen = false;
         return false;
 #else
-        char* window = static_cast<char*>(mmap(nullptr, map_bytes,
+        window = static_cast<char*>(mmap(nullptr, map_bytes,
             PROT_READ | PROT_WRITE, MAP_SHARED, m_fd,
             static_cast<off_t>(aligned_off)));
 
