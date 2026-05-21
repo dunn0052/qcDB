@@ -331,10 +331,12 @@ static bool TestSchemaSizeMismatch(const char* path)
     int fd = open(path, O_RDWR);
     if (fd < 0) return false;
     DBHeader hdr = {};
-    read(fd, &hdr, sizeof(DBHeader));
+    ssize_t nr = read(fd, &hdr, sizeof(DBHeader));
+    if (nr != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: read hdr in mismatch test\n"); close(fd); return false; }
     hdr.m_RecordSize = 99;  // wrong size
-    lseek(fd, 0, SEEK_SET);
-    write(fd, &hdr, sizeof(DBHeader));
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1) { fprintf(stderr, "FAIL: lseek in mismatch test\n"); close(fd); return false; }
+    ssize_t nw = write(fd, &hdr, sizeof(DBHeader));
+    if (nw != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: write hdr in mismatch test\n"); close(fd); return false; }
     close(fd);
 
     qcDB::dbInterface<TestRecord> db(path);
@@ -355,10 +357,12 @@ static bool TestSchemaCorrupt(const char* path)
     int fd = open(path, O_RDWR);
     if (fd < 0) return false;
     DBHeader hdr = {};
-    read(fd, &hdr, sizeof(DBHeader));
+    ssize_t nr = read(fd, &hdr, sizeof(DBHeader));
+    if (nr != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: read hdr in corrupt test\n"); close(fd); return false; }
     hdr.m_SchemaSize = 999;  // does not equal m_NumFields * 40
-    lseek(fd, 0, SEEK_SET);
-    write(fd, &hdr, sizeof(DBHeader));
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1) { fprintf(stderr, "FAIL: lseek in corrupt test\n"); close(fd); return false; }
+    ssize_t nw = write(fd, &hdr, sizeof(DBHeader));
+    if (nw != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: write hdr in corrupt test\n"); close(fd); return false; }
     close(fd);
 
     qcDB::dbInterface<TestRecord> db(path);
