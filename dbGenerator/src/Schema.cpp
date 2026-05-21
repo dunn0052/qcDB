@@ -581,12 +581,19 @@ RETCODE GenerateDatabase(const std::string& schemaPath, const std::string& heade
 
     // Recalculate objectSize from scratch with metadata at the front
     object.objectSize = 0;
+    size_t maxFieldAlignment = 1;
     for(FIELD_SCHEMA& field : object.fields)
     {
         size_t padding = CalculatePadding(object, field);
-        field.fieldOffset = object.objectSize + padding;  // byte offset within struct
+        field.fieldOffset = object.objectSize + padding;
         object.objectSize += padding + field.fieldSize;
+        if (field.fieldAlignment > maxFieldAlignment)
+            maxFieldAlignment = field.fieldAlignment;
     }
+
+    // Round up to match C struct trailing padding (sizeof(T) must be a multiple of max alignment)
+    if (object.objectSize % maxFieldAlignment != 0)
+        object.objectSize += maxFieldAlignment - (object.objectSize % maxFieldAlignment);
 
     LOG_DEBUG("OBJECT: ", object.objectName, " size is: ", object.objectSize, " bytes per record");
 
