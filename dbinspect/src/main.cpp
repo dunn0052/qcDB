@@ -41,39 +41,50 @@ static bool IsPrintableString(const char* data, uint16_t count)
     return true;
 }
 
-static void PrintFieldValue(const char* data, char type, uint16_t count)
+static void FieldValueToStr(char* buf, size_t bufLen,
+                            const char* data, char type, uint16_t count)
 {
-    if (type == 'x') { printf("-"); return; }
+    if (type == 'x') { snprintf(buf, bufLen, "-"); return; }
 
     if (type == 'c')
     {
         if (IsPrintableString(data, count))
-            printf("%.*s", static_cast<int>(count), data);
+            snprintf(buf, bufLen, "%.*s", static_cast<int>(count), data);
         else
         {
-            printf("0x");
-            for (uint16_t i = 0; i < count; i++)
-                printf("%02x", static_cast<unsigned char>(data[i]));
+            size_t pos = 0;
+            pos += snprintf(buf + pos, bufLen - pos, "0x");
+            for (uint16_t i = 0; i < count && pos + 3 < bufLen; i++)
+                pos += snprintf(buf + pos, bufLen - pos, "%02x",
+                                static_cast<unsigned char>(data[i]));
         }
         return;
     }
 
     size_t elemSize = TypeSize(type);
-    for (uint16_t i = 0; i < count; i++)
+    size_t pos = 0;
+    for (uint16_t i = 0; i < count && pos < bufLen - 1; i++)
     {
         const char* elem = data + i * elemSize;
-        if (i > 0) printf(",");
+        if (i > 0) pos += snprintf(buf + pos, bufLen - pos, ",");
         switch (type)
         {
-            case 'i': { int v;           memcpy(&v, elem, 4);                       printf("%d",  v); break; }
-            case 'I': { unsigned int v;  memcpy(&v, elem, 4);                       printf("%u",  v); break; }
-            case 'l': { long v;          memcpy(&v, elem, sizeof(long));            printf("%ld", v); break; }
-            case 'L': { unsigned long v; memcpy(&v, elem, sizeof(unsigned long));   printf("%lu", v); break; }
-            case '?': { bool v;          memcpy(&v, elem, 1);                       printf("%s",  v ? "true" : "false"); break; }
-            case 'b': { unsigned char v; memcpy(&v, elem, 1);                       printf("%u",  v); break; }
-            default:  printf("?"); break;
+            case 'i': { int v;           memcpy(&v, elem, 4);                     pos += snprintf(buf+pos, bufLen-pos, "%d",  v); break; }
+            case 'I': { unsigned int v;  memcpy(&v, elem, 4);                     pos += snprintf(buf+pos, bufLen-pos, "%u",  v); break; }
+            case 'l': { long v;          memcpy(&v, elem, sizeof(long));          pos += snprintf(buf+pos, bufLen-pos, "%ld", v); break; }
+            case 'L': { unsigned long v; memcpy(&v, elem, sizeof(unsigned long)); pos += snprintf(buf+pos, bufLen-pos, "%lu", v); break; }
+            case '?': { bool v;          memcpy(&v, elem, 1);                     pos += snprintf(buf+pos, bufLen-pos, "%s",  v ? "true" : "false"); break; }
+            case 'b': { unsigned char v; memcpy(&v, elem, 1);                     pos += snprintf(buf+pos, bufLen-pos, "%u",  v); break; }
+            default:  pos += snprintf(buf+pos, bufLen-pos, "?"); break;
         }
     }
+}
+
+static void PrintFieldValue(const char* data, char type, uint16_t count)
+{
+    char buf[256];
+    FieldValueToStr(buf, sizeof(buf), data, type, count);
+    printf("%s", buf);
 }
 
 static FieldDescriptor* GetDescriptors(char* base)
@@ -170,14 +181,14 @@ static void PrintTableHeader(char* base)
     for (uint8_t i = 0; i < hdr->m_NumFields; i++)
     {
         if (descs[i].m_Type == 'x') continue;
-        printf("%-16s  ", descs[i].m_Name);
+        printf("%-20s  ", descs[i].m_Name);
     }
     printf("\n");
 
     for (uint8_t i = 0; i < hdr->m_NumFields; i++)
     {
         if (descs[i].m_Type == 'x') continue;
-        printf("----------------  ");
+        printf("--------------------  ");
     }
     printf("\n");
 }
@@ -187,14 +198,16 @@ static void PrintRecordTable(char* base, size_t record)
     DBHeader* hdr    = reinterpret_cast<DBHeader*>(base);
     FieldDescriptor* descs = GetDescriptors(base);
     char* rec = GetRecord(base, record);
+    char buf[256];
 
     for (uint8_t i = 0; i < hdr->m_NumFields; i++)
     {
         if (descs[i].m_Type == 'x') continue;
-        PrintFieldValue(rec + descs[i].m_FieldOffset,
+        FieldValueToStr(buf, sizeof(buf),
+                        rec + descs[i].m_FieldOffset,
                         descs[i].m_Type,
                         descs[i].m_Count);
-        printf("  ");
+        printf("%-20s  ", buf);
     }
     printf("\n");
 }
