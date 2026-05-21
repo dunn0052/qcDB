@@ -17,3 +17,6 @@ add_subdirectory(${COMPONENT_DB_TEST})
 set(COMPONENT_UNIT_TEST unitTest)
 add_subdirectory(${COMPONENT_UNIT_TEST})
 #add_subdirectory(${COMPONENT_WINDOWS_DB_TEST})
+
+set(COMPONENT_DB_INSPECT dbinspect)
+add_subdirectory(${COMPONENT_DB_INSPECT})
