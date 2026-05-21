@@ -36,4 +36,10 @@
     // Lock failed
     constexpr RETCODE RTN_LOCK_ERROR = 0x0100;
 
+    // Record size in file does not match sizeof(T)
+    constexpr RETCODE RTN_SIZE_MISMATCH = 0x0200;
+
+    // Schema block invariant violated — file may be corrupt
+    constexpr RETCODE RTN_CORRUPT       = 0x0400;
+
 #endif
