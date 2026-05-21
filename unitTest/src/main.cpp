@@ -23,14 +23,23 @@ static_assert(sizeof(TestRecord) == 48, "TestRecord must be 48 bytes");
 
 static bool CreateTestDB(const char* path, size_t num_records)
 {
-    size_t fileSize = sizeof(DBHeader) + num_records * sizeof(TestRecord);
+    static_assert(offsetof(TestRecord, RECORD_NUMBER) ==  0, "RECORD_NUMBER offset wrong");
+    static_assert(offsetof(TestRecord, LAST_MODIFIED) ==  8, "LAST_MODIFIED offset wrong");
+    static_assert(offsetof(TestRecord, id)            == 16, "id offset wrong");
+    static_assert(offsetof(TestRecord, name)          == 20, "name offset wrong");
+
+    const uint32_t schemaSize = 4 * static_cast<uint32_t>(sizeof(FieldDescriptor));
+    size_t fileSize = sizeof(DBHeader) + schemaSize + num_records * sizeof(TestRecord);
+
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return false;
-
     if (ftruncate(fd, static_cast<off_t>(fileSize)) != 0) { close(fd); return false; }
 
     DBHeader header = {};
     header.m_NumRecords = num_records;
+    header.m_SchemaSize = schemaSize;
+    header.m_RecordSize = static_cast<uint32_t>(sizeof(TestRecord));
+    header.m_NumFields  = 4;
     strncpy(header.m_ObjectName, "TEST", sizeof(header.m_ObjectName) - 1);
 
     pthread_rwlockattr_t attr = {};
@@ -43,8 +52,35 @@ static bool CreateTestDB(const char* path, size_t num_records)
     pthread_rwlockattr_destroy(&attr);
 
     ssize_t written = write(fd, &header, sizeof(DBHeader));
+    if (written != static_cast<ssize_t>(sizeof(DBHeader))) { close(fd); return false; }
+
+    FieldDescriptor descs[4] = {};
+
+    strncpy(descs[0].m_Name, "RECORD_NUMBER", 31);
+    descs[0].m_Type        = 'L';
+    descs[0].m_Count       = 1;
+    descs[0].m_FieldOffset = 0;
+    descs[0].m_Flags       = FIELD_FLAG_READONLY | FIELD_FLAG_METADATA;
+
+    strncpy(descs[1].m_Name, "LAST_MODIFIED", 31);
+    descs[1].m_Type        = 'L';
+    descs[1].m_Count       = 1;
+    descs[1].m_FieldOffset = 8;
+    descs[1].m_Flags       = FIELD_FLAG_READONLY | FIELD_FLAG_METADATA;
+
+    strncpy(descs[2].m_Name, "id", 31);
+    descs[2].m_Type        = 'i';
+    descs[2].m_Count       = 1;
+    descs[2].m_FieldOffset = 16;
+
+    strncpy(descs[3].m_Name, "name", 31);
+    descs[3].m_Type        = 'c';
+    descs[3].m_Count       = 28;
+    descs[3].m_FieldOffset = 20;
+
+    written = write(fd, descs, schemaSize);
     close(fd);
-    return written == static_cast<ssize_t>(sizeof(DBHeader));
+    return written == static_cast<ssize_t>(schemaSize);
 }
 
 // ---- Tests declared here, defined after ----
@@ -56,6 +92,8 @@ static bool TestFindFirstOf(const char* path);
 static bool TestDeleteObject(const char* path);
 static bool TestClear(const char* path);
 static bool TestMetadataAutoStamp(const char* path);
+static bool TestSchemaSizeMismatch(const char* path);
+static bool TestSchemaCorrupt(const char* path);
 
 int main()
 {
@@ -76,6 +114,8 @@ int main()
     pass &= TestDeleteObject(dbPath);
     pass &= TestClear(dbPath);
     pass &= TestMetadataAutoStamp(dbPath);
+    pass &= TestSchemaSizeMismatch("/tmp/test_sizemismatch.db");
+    pass &= TestSchemaCorrupt("/tmp/test_corrupt.db");
 
     unlink(dbPath);
     fprintf(stdout, pass ? "ALL TESTS PASSED\n" : "SOME TESTS FAILED\n");
@@ -280,5 +320,57 @@ static bool TestMetadataAutoStamp(const char* path)
     TEST_ASSERT(r2.id == 99,                            "id wrong after second write");
 
     fprintf(stdout, "PASS: TestMetadataAutoStamp\n");
+    return true;
+}
+
+static bool TestSchemaSizeMismatch(const char* path)
+{
+    // Create a valid DB then tamper m_RecordSize to a wrong value
+    if (!CreateTestDB(path, 10)) { fprintf(stderr, "FAIL: CreateTestDB for mismatch test\n"); return false; }
+
+    int fd = open(path, O_RDWR);
+    if (fd < 0) return false;
+    DBHeader hdr = {};
+    ssize_t nr = read(fd, &hdr, sizeof(DBHeader));
+    if (nr != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: read hdr in mismatch test\n"); close(fd); return false; }
+    hdr.m_RecordSize = 99;  // wrong size
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1) { fprintf(stderr, "FAIL: lseek in mismatch test\n"); close(fd); return false; }
+    ssize_t nw = write(fd, &hdr, sizeof(DBHeader));
+    if (nw != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: write hdr in mismatch test\n"); close(fd); return false; }
+    close(fd);
+
+    qcDB::dbInterface<TestRecord> db(path);
+    TestRecord r = {};
+    RETCODE rc = db.ReadObject(0, r);
+    TEST_ASSERT(rc == RTN_NULL_OBJ, "dbInterface should reject wrong m_RecordSize");
+
+    unlink(path);
+    fprintf(stdout, "PASS: TestSchemaSizeMismatch\n");
+    return true;
+}
+
+static bool TestSchemaCorrupt(const char* path)
+{
+    // Create a valid DB then tamper m_SchemaSize to an invalid value
+    if (!CreateTestDB(path, 10)) { fprintf(stderr, "FAIL: CreateTestDB for corrupt test\n"); return false; }
+
+    int fd = open(path, O_RDWR);
+    if (fd < 0) return false;
+    DBHeader hdr = {};
+    ssize_t nr = read(fd, &hdr, sizeof(DBHeader));
+    if (nr != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: read hdr in corrupt test\n"); close(fd); return false; }
+    hdr.m_SchemaSize = 999;  // does not equal m_NumFields * 40
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1) { fprintf(stderr, "FAIL: lseek in corrupt test\n"); close(fd); return false; }
+    ssize_t nw = write(fd, &hdr, sizeof(DBHeader));
+    if (nw != (ssize_t)sizeof(DBHeader)) { fprintf(stderr, "FAIL: write hdr in corrupt test\n"); close(fd); return false; }
+    close(fd);
+
+    qcDB::dbInterface<TestRecord> db(path);
+    TestRecord r = {};
+    RETCODE rc = db.ReadObject(0, r);
+    TEST_ASSERT(rc == RTN_NULL_OBJ, "dbInterface should reject corrupt m_SchemaSize");
+
+    unlink(path);
+    fprintf(stdout, "PASS: TestSchemaCorrupt\n");
     return true;
 }

@@ -32,6 +32,7 @@ struct FIELD_SCHEMA
     size_t numElements;
     size_t fieldSize;
     size_t fieldAlignment;
+    size_t fieldOffset;    // NEW: byte offset within the record struct
 };
 
 inline std::istream& operator >> (std::istream& input_stream,
