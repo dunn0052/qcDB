@@ -625,16 +625,22 @@ public:
         ~dbInterface(void)
         {
 #ifdef WINDOWS_PLATFORM
-            // Unmap the file view
-            UnmapViewOfFile(m_DBAddress);
-
-    #else
-            int error = munmap(m_DBAddress, m_Size);
-            if(0 == error)
-            {
-                m_IsOpen = false;
-            }
+            if (nullptr != m_DataWindow)
+                UnmapViewOfFile(m_DataWindow);
+            if (nullptr != m_DBAddress)
+                UnmapViewOfFile(m_DBAddress);
+#else
+            if (nullptr != m_DataWindow)
+                munmap(m_DataWindow, m_WindowMappedBytes);
+            if (nullptr != m_DBAddress)
+                munmap(m_DBAddress, m_PageSize);
+            if (INVALID_FD != m_fd)
+                close(m_fd);
 #endif
+            m_IsOpen     = false;
+            m_DataWindow = nullptr;
+            m_DBAddress  = nullptr;
+            m_fd         = INVALID_FD;
         }
 
 protected:
