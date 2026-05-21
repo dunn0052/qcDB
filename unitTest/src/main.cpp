@@ -8,12 +8,15 @@
 #include <pthread.h>
 #include <sys/stat.h>
 
-// 32-byte struct — on 4KB page, 128 records/chunk; on 64KB page, 2048/chunk
+// 48-byte struct — on 4KB page, 85 records/chunk; on 64KB page, 1365/chunk
+// RECORD_NUMBER and LAST_MODIFIED are auto-stamped by qcDB on every write
 struct TestRecord {
+    unsigned long RECORD_NUMBER;
+    unsigned long LAST_MODIFIED;
     int id;
     char name[28];
 };
-static_assert(sizeof(TestRecord) == 32, "TestRecord must be 32 bytes");
+static_assert(sizeof(TestRecord) == 48, "TestRecord must be 48 bytes");
 
 #define TEST_ASSERT(cond, msg) \
     do { if (!(cond)) { fprintf(stderr, "FAIL [%s:%d]: %s\n", __FILE__, __LINE__, msg); return false; } } while(0)
@@ -52,6 +55,7 @@ static bool TestWriteObjects(const char* path);
 static bool TestFindFirstOf(const char* path);
 static bool TestDeleteObject(const char* path);
 static bool TestClear(const char* path);
+static bool TestMetadataAutoStamp(const char* path);
 
 int main()
 {
@@ -71,6 +75,7 @@ int main()
     pass &= TestFindFirstOf(dbPath);
     pass &= TestDeleteObject(dbPath);
     pass &= TestClear(dbPath);
+    pass &= TestMetadataAutoStamp(dbPath);
 
     unlink(dbPath);
     fprintf(stdout, pass ? "ALL TESTS PASSED\n" : "SOME TESTS FAILED\n");
@@ -236,5 +241,44 @@ static bool TestClear(const char* path)
     TEST_ASSERT(memcmp(&r, &zero, sizeof(TestRecord)) == 0, "Record 10 not zeroed after Clear");
 
     fprintf(stdout, "PASS: TestClear\n");
+    return true;
+}
+
+static bool TestMetadataAutoStamp(const char* path)
+{
+    qcDB::dbInterface<TestRecord> db(path);
+    db.Clear();
+
+    struct timespec ts_before = {};
+    clock_gettime(CLOCK_REALTIME, &ts_before);
+    unsigned long before_ns = static_cast<unsigned long>(ts_before.tv_sec) * 1000000000UL
+                            + static_cast<unsigned long>(ts_before.tv_nsec);
+
+    TestRecord w = {};
+    w.id = 55;
+    strncpy(w.name, "STAMP", sizeof(w.name) - 1);
+    TEST_ASSERT(RTN_OK == db.WriteObject(7, w), "WriteObject(7) first write failed");
+
+    TestRecord r = {};
+    TEST_ASSERT(RTN_OK == db.ReadObject(7, r), "ReadObject(7) first read failed");
+    TEST_ASSERT(r.RECORD_NUMBER == 7,          "RECORD_NUMBER not stamped");
+    TEST_ASSERT(r.LAST_MODIFIED >= before_ns,  "LAST_MODIFIED not >= timestamp before write");
+    TEST_ASSERT(r.id == 55,                    "id overwritten by stamp");
+    TEST_ASSERT(strcmp(r.name, "STAMP") == 0,  "name overwritten by stamp");
+
+    unsigned long first_ts = r.LAST_MODIFIED;
+
+    TestRecord w2 = {};
+    w2.id = 99;
+    strncpy(w2.name, "STAMP2", sizeof(w2.name) - 1);
+    TEST_ASSERT(RTN_OK == db.WriteObject(7, w2), "WriteObject(7) second write failed");
+
+    TestRecord r2 = {};
+    TEST_ASSERT(RTN_OK == db.ReadObject(7, r2),         "ReadObject(7) second read failed");
+    TEST_ASSERT(r2.RECORD_NUMBER == 7,                  "RECORD_NUMBER wrong after second write");
+    TEST_ASSERT(r2.LAST_MODIFIED >= first_ts,           "LAST_MODIFIED did not advance on second write");
+    TEST_ASSERT(r2.id == 99,                            "id wrong after second write");
+
+    fprintf(stdout, "PASS: TestMetadataAutoStamp\n");
     return true;
 }

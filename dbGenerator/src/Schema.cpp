@@ -532,6 +532,52 @@ RETCODE GenerateDatabase(const std::string& schemaPath, const std::string& heade
         }
     }
 
+    // Reject schemas that reuse reserved metadata field names
+    for(const FIELD_SCHEMA& field : object.fields)
+    {
+        if(field.fieldName == "RECORD_NUMBER" || field.fieldName == "LAST_MODIFIED")
+        {
+            LOG_FATAL("Schema field '", field.fieldName, "' conflicts with reserved metadata field");
+            return RTN_BAD_ARG;
+        }
+    }
+
+    // Build synthetic metadata fields (ULONG = 'L', both 8-byte aligned)
+    FIELD_SCHEMA recordNumberField = { 0 };
+    recordNumberField.fieldNumber    = 0;
+    recordNumberField.fieldName      = "RECORD_NUMBER";
+    recordNumberField.fieldType      = static_cast<char>(FIELD_TYPE::ULONG);
+    recordNumberField.numElements    = 1;
+    recordNumberField.fieldSize      = sizeof(unsigned long);
+    recordNumberField.fieldAlignment = alignof(unsigned long);
+
+    FIELD_SCHEMA lastModifiedField = { 0 };
+    lastModifiedField.fieldNumber    = 1;
+    lastModifiedField.fieldName      = "LAST_MODIFIED";
+    lastModifiedField.fieldType      = static_cast<char>(FIELD_TYPE::ULONG);
+    lastModifiedField.numElements    = 1;
+    lastModifiedField.fieldSize      = sizeof(unsigned long);
+    lastModifiedField.fieldAlignment = alignof(unsigned long);
+
+    // Prepend metadata before user fields
+    std::vector<FIELD_SCHEMA> newFields = { recordNumberField, lastModifiedField };
+    newFields.insert(newFields.end(), object.fields.begin(), object.fields.end());
+    object.fields = std::move(newFields);
+
+    // Renumber all fields sequentially
+    for(size_t i = 0; i < object.fields.size(); ++i)
+    {
+        object.fields[i].fieldNumber = i;
+    }
+
+    // Recalculate objectSize from scratch with metadata at the front
+    object.objectSize = 0;
+    for(const FIELD_SCHEMA& field : object.fields)
+    {
+        size_t padding = CalculatePadding(object, field);
+        object.objectSize += padding + field.fieldSize;
+    }
+
     LOG_DEBUG("OBJECT: ", object.objectName, " size is: ", object.objectSize, " bytes per record");
 
     retcode = GenerateHeader(object, headerOutputPath);
