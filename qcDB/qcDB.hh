@@ -732,30 +732,74 @@ protected:
         return RTN_OK;
     }
 
+    bool SlideWindow(size_t record)
+    {
+#ifdef WINDOWS_PLATFORM
+        if (nullptr != m_DataWindow)
+        {
+            UnmapViewOfFile(m_DataWindow);
+            m_DataWindow = nullptr;
+        }
+#else
+        if (nullptr != m_DataWindow)
+        {
+            munmap(m_DataWindow, m_WindowMappedBytes);
+            m_DataWindow = nullptr;
+        }
+#endif
+        size_t chunk_index  = record / m_ChunkRecords;
+        size_t chunk_start  = chunk_index * m_ChunkRecords;
+        size_t file_offset  = sizeof(DBHeader) + chunk_start * sizeof(object);
+        size_t aligned_off  = (file_offset / m_PageSize) * m_PageSize;
+        size_t extra        = file_offset - aligned_off;
+        size_t data_bytes   = m_ChunkRecords * sizeof(object);
+        size_t map_bytes    = ((extra + data_bytes + m_PageSize - 1) / m_PageSize) * m_PageSize;
+
+        if (aligned_off + map_bytes > m_Size)
+            map_bytes = m_Size - aligned_off;
+
+#ifdef WINDOWS_PLATFORM
+        // Full Windows windowed implementation requires storing the file HANDLE.
+        // Stub: mark closed so callers fall back gracefully.
+        m_IsOpen = false;
+        return false;
+#else
+        char* window = static_cast<char*>(mmap(nullptr, map_bytes,
+            PROT_READ | PROT_WRITE, MAP_SHARED, m_fd,
+            static_cast<off_t>(aligned_off)));
+
+        if (MAP_FAILED == window)
+        {
+            m_DataWindow = nullptr;
+            m_IsOpen = false;
+            return false;
+        }
+#endif
+        m_DataWindow        = window;
+        m_WindowChunkIndex  = chunk_index;
+        m_WindowMappedBytes = map_bytes;
+        m_WindowExtra       = extra;
+        return true;
+    }
+
     /*
      * Get a pointer into the database according to the record number.
      * Returns a nullptr on error.
      */
     char* Get(const size_t record)
     {
-        if(NumberOfRecords() - 1 < record)
-        {
+        if (!m_IsOpen || nullptr == m_DBAddress || record >= m_NumRecords)
             return nullptr;
+
+        size_t chunk_index = record / m_ChunkRecords;
+        if (chunk_index != m_WindowChunkIndex || nullptr == m_DataWindow)
+        {
+            if (!SlideWindow(record))
+                return nullptr;
         }
 
-        if(!m_IsOpen || nullptr == m_DBAddress)
-        {
-            return nullptr;
-        }
-
-        // Record off by 1 adjustment
-        size_t byte_index = sizeof(DBHeader) + sizeof(object) * record;
-        if(m_Size < byte_index)
-        {
-            return nullptr;
-        }
-
-        return m_DBAddress + byte_index;
+        size_t chunk_start = m_WindowChunkIndex * m_ChunkRecords;
+        return m_DataWindow + m_WindowExtra + (record - chunk_start) * sizeof(object);
     }
 
     /*
