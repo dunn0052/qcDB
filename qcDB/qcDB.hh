@@ -130,47 +130,40 @@ public:
          */
         RETCODE WriteObject(object& objectWrite)
         {
-            RETCODE retcode = RTN_OK;
-            object emptyObject = { 0 };
-            retcode = WriteLockDB();
+            const object emptyObject = {};
+            RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
-            {
                 return retcode;
-            }
 
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
             size_t record = header->m_LastWritten;
-            object* currentObject = reinterpret_cast<object*>(m_DBAddress + sizeof(DBHeader) + record * sizeof(object));
-            for (; record < NumberOfRecords(); record++)
+            bool found = false;
+
+            for (; record < m_NumRecords; record++)
             {
-                if (memcmp(currentObject, &emptyObject, sizeof(object)) == 0)
+                char* p = Get(record);
+                if (nullptr == p)
                 {
-                    header->m_LastWritten = record;
-                    memcpy(currentObject, &objectWrite, sizeof(object));
-
-                    if (header->m_Size < record)
-                    {
-                        header->m_Size = record;
-                    }
-
-                    break;
+                    UnlockDB();
+                    return RTN_NULL_OBJ;
                 }
 
-                currentObject++;
+                if (memcmp(p, &emptyObject, sizeof(object)) == 0)
+                {
+                    header->m_LastWritten = record;
+                    memcpy(p, &objectWrite, sizeof(object));
+                    if (header->m_Size < record)
+                        header->m_Size = record;
+                    found = true;
+                    break;
+                }
             }
 
             retcode = UnlockDB();
             if (RTN_OK != retcode)
-            {
                 return retcode;
-            }
 
-            if(NumberOfRecords() == record)
-            {
-                return RTN_NOT_FOUND;
-            }
-
-            return RTN_OK;
+            return found ? RTN_OK : RTN_NOT_FOUND;
         }
 
         /*
@@ -227,54 +220,45 @@ public:
          */
         RETCODE WriteObjects(std::vector<object>& objects)
         {
-            RETCODE retcode = RTN_OK;
-            const object emptyObject = { 0 };
+            const object emptyObject = {};
             auto objectsIterator = objects.begin();
 
-            retcode = WriteLockDB();
+            RETCODE retcode = WriteLockDB();
             if (RTN_OK != retcode)
-            {
                 return retcode;
-            }
 
             DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
             size_t record = header->m_LastWritten;
-            object* currentObject = reinterpret_cast<object*>(m_DBAddress + sizeof(DBHeader) + record * sizeof(object));
-            for (; record < NumberOfRecords(); record++)
+
+            for (; record < m_NumRecords; record++)
             {
-                if (0 == memcmp(currentObject, &emptyObject, sizeof(object)))
+                char* p = Get(record);
+                if (nullptr == p)
+                {
+                    UnlockDB();
+                    return RTN_NULL_OBJ;
+                }
+
+                if (0 == memcmp(p, &emptyObject, sizeof(object)))
                 {
                     if (objectsIterator == objects.end())
                     {
                         header->m_LastWritten = record;
                         break;
                     }
-
-                    memcpy(currentObject, &(*objectsIterator), sizeof(object));
-
+                    memcpy(p, &(*objectsIterator), sizeof(object));
                     ++objectsIterator;
                 }
-
-                currentObject++;
             }
 
             if (header->m_Size < record)
-            {
                 header->m_Size = record;
-            }
 
             retcode = UnlockDB();
             if (RTN_OK != retcode)
-            {
                 return retcode;
-            }
 
-            if (objectsIterator != objects.end())
-            {
-                return RTN_EOF;
-            }
-
-            return RTN_OK;
+            return (objectsIterator != objects.end()) ? RTN_EOF : RTN_OK;
         }
 
         /*
@@ -326,34 +310,32 @@ public:
          */
         RETCODE Clear(void)
         {
-            RETCODE retcode = RTN_OK;
-            if (m_IsOpen)
+            if (!m_IsOpen)
+                return RTN_MALLOC_FAIL;
+
+            RETCODE retcode = WriteLockDB();
+            if (RTN_OK != retcode)
+                return retcode;
+
+            size_t total_chunks = (m_NumRecords + m_ChunkRecords - 1) / m_ChunkRecords;
+            for (size_t chunk = 0; chunk < total_chunks; chunk++)
             {
-                retcode = WriteLockDB();
-                if (RTN_OK != retcode)
+                size_t chunk_start = chunk * m_ChunkRecords;
+                if (!SlideWindow(chunk_start))
                 {
-                    return retcode;
+                    UnlockDB();
+                    return RTN_NULL_OBJ;
                 }
-
-                DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
-                size_t dbSize = header->m_NumRecords * sizeof(object);
-                object* start = reinterpret_cast<object*>(m_DBAddress + sizeof(DBHeader));
-
-                memset(start, 0, dbSize);
-
-                header->m_LastWritten = 0;
-                header->m_Size = 0;
-
-                retcode = UnlockDB();
-                if (RTN_OK != retcode)
-                {
-                    return retcode;
-                }
-
-                return RTN_OK;
+                size_t chunk_end = std::min(chunk_start + m_ChunkRecords, m_NumRecords);
+                size_t records_in_chunk = chunk_end - chunk_start;
+                memset(m_DataWindow + m_WindowExtra, 0, records_in_chunk * sizeof(object));
             }
 
-            return RTN_MALLOC_FAIL;
+            DBHeader* header = reinterpret_cast<DBHeader*>(m_DBAddress);
+            header->m_LastWritten = 0;
+            header->m_Size = 0;
+
+            return UnlockDB();
         }
 
         /*
