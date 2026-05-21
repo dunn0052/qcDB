@@ -414,6 +414,9 @@ RETCODE CreateDatabaseFile(const OBJECT_SCHEMA& object, const std::string& datab
     pthread_rwlockattr_t dbLockAttributest = {0};
     pthread_rwlockattr_init(&dbLockAttributest);
     pthread_rwlockattr_setpshared(&dbLockAttributest, PTHREAD_PROCESS_SHARED);
+#ifndef WINDOWS_PLATFORM
+    pthread_rwlockattr_setkind_np(&dbLockAttributest, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+#endif
     pthread_rwlock_init(&dbHeader.m_DBLock, &dbLockAttributest);
     pthread_rwlockattr_destroy(&dbLockAttributest);
     size_t numbytes = write(fd, static_cast<void*>(&dbHeader), sizeof(DBHeader));
